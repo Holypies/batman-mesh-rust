@@ -1,6 +1,14 @@
 use crate::consts::{SEQ_NO_RANGE,RESET_PROT, WINDOW_SIZE};
 use crate::time::Instant;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitWindowResult {
+    New, 
+    OrigDup, 
+    NeighDup, 
+    Protected
+}
+
 
 // --- sequnce window ---
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

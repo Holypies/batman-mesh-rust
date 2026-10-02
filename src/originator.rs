@@ -1,11 +1,9 @@
 use crate::arrayvec::ArrayVec;
 use crate::bitwindow::WindowCheck::Protected;
-use crate::bitwindow::{BitWindow, signed_diff, window_protection, WindowCheck};
-use crate::consts::{MAX_NEIGHBORS, TQ_RING_SIZE, WINDOW_SIZE};
+use crate::bitwindow::{BitWindow, BitWindowResult, WindowCheck, signed_diff, window_protection};
+use crate::consts::{MAX_NEIGHBORS, TQ_RING_SIZE, WINDOW_SIZE, ORIG_TIME_OUT};
 use crate::mac::Mac;
 use crate::time::Instant;
-
-
 
 pub struct Originator{
     mac: Mac,
@@ -83,6 +81,19 @@ impl Originator {
         self.last_ttvn
     }
 
+
+    // --- Setters ---
+    pub fn set_router(&mut self, mac:Mac){
+        self.router_id = Some(mac)
+    }
+    pub fn set_last_ttvn(&mut self, ttvn:u8){
+        self.last_ttvn = ttvn
+    }
+    pub fn set_last_seqno_forwarded(&mut self, last_seqno:u32){
+        self.last_seqno_forwarded = Some(last_seqno);
+    }
+
+
     // --- functions ---
     pub fn add_neighbor(&mut self, neigh:Neighbor, now:Instant){
          if self.neighbors.is_full(){
@@ -112,6 +123,15 @@ impl Originator {
         None
     }
 
+    pub fn find_neighbor_mut(&mut self, addr:Mac)->Option<&mut Neighbor>{
+        for neighbor in self.neighbors.iter_mut() {
+            if neighbor.addr == addr {
+                return Some(neighbor);
+            }
+        }
+        None
+    }
+
 
     pub fn slide_echo_window(&mut self) {
         self.echo.update(1, false);
@@ -120,7 +140,8 @@ impl Originator {
         self.echo.set(offset);
     }
 
-    pub fn update_seqno(&mut self,seqno:u32, sender:Mac, ttl:u8, now:Instant){
+    pub fn update_seqno(&mut self,seqno:u32, sender:Mac, ttl:u8, now:Instant)->BitWindowResult{
+
         let diff: i32 = signed_diff(seqno, self.last_seqno);
         let window_check:WindowCheck = window_protection(
             diff, 
@@ -130,28 +151,33 @@ impl Originator {
         );
 
         if window_check == Protected{
-            return Protected;
-        }
-        let is_new_seq:bool;
-        for neighbor in self.neighbors.iter_mut() {
-            if neighbor.is_duplicate(self.last_seqno, seqno){
-                // TODO: return doup flag 
-                return;
-            }
-            // if 
-            if neighbor.addr == sender{
-                is_new_seq =  neighbor.slide_window(diff, true);
-            } else {
-                is_new_seq = neighbor.slide_window(diff, false);
-            }
+            return BitWindowResult::Protected;
         }
 
-        if is_new_seq {
+        let mut status: BitWindowResult = BitWindowResult::New;
+        let mut window_moved: bool = false;
+
+        for neighbor in self.neighbors.iter_mut() {
+            let is_sender = neighbor.addr() == sender;
+            if neighbor.is_duplicate(self.last_seqno, seqno){
+                if is_sender {
+                    status = BitWindowResult::NeighDup;
+
+                } else if status != BitWindowResult::NeighDup {
+                    status = BitWindowResult::OrigDup;
+
+                }
+            }
+            window_moved |= neighbor.slide_window(diff, is_sender);
+        }
+
+        if window_moved {
             self.last_seqno = seqno;
             self.last_ttl = ttl;
-        }
-        // TODO return correct enum
-        return;
+            
+        } 
+
+        status
     }
 
     pub fn check_bcast(&mut self, seqno:u32, now:Instant)->bool{
@@ -180,11 +206,74 @@ impl Originator {
         return true;
 
     }
-    // TODO: Add setter/update functions for needed orig varibles
+
+
+    pub fn router_neighbor(&self)->Option<&Neighbor>{
+        for neighbor in self.neighbors.iter() {
+            if Some(neighbor.addr) == self.router_id {
+                return Some(neighbor);
+            }
+        }
+        None
+    }
+
+    pub fn best_neighbor(&self)->Option<Mac>{
+        let mut best_neighbor: &Neighbor = match self.neighbors.get(0) {
+            Some(neighbor) => neighbor,
+            None => return None,
+        };
+
+        for neighbor in self.neighbors.iter() {
+            if neighbor.tq.avg() > best_neighbor.tq.avg() {
+                best_neighbor = neighbor;
+            }
+        }
+        Some(best_neighbor.addr())
+    }
+
+    pub fn purge_timed_out_neighbors(&mut self, now:Instant)->bool{
+        let mut removed_router: bool=false;
+        
+        let mut i: usize = 0;
+        while i < self.neighbors.len() {
+            let timed_out: bool = match self.neighbors.get(i) {
+                Some(neighbor) => neighbor.has_timed_out(now),
+                None => false,
+            };
+
+            if timed_out {
+                match self.neighbors.swap_remove(i) {
+                    Some(removed) => {
+                        if Some(removed.addr()) == self.router_id {
+                            removed_router = true;
+                        }
+                    }
+                    None => {}
+                }
+            
+            } else {
+                i += 1;
+            }
+        }
+        if removed_router{
+            self.router_id = self.best_neighbor();
+        }
+        removed_router
+    }
+
+    pub fn has_timed_out(&self, now:Instant)->bool{
+        let time_out = self.last_seen+ORIG_TIME_OUT;
+        if now>time_out{
+            return true;
+        }        
+        return false;
+    }
+
 
 
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Neighbor{
     addr:Mac,
     last_seen:Instant,
@@ -220,7 +309,20 @@ impl Neighbor {
         self.last_ttl
     }
 
+    // --- setters ---
+    pub fn set_last_ttl(&mut self, ttl: u8){
+        self.last_ttl=ttl
+    }
+
     // --- functions---
+    pub fn avg_tq(&self)->u8{
+        self.tq.avg()
+    }
+
+    pub fn real_bits_count(&self)->u8{
+        self.real_bits.count()
+    }
+
     pub fn touch(&mut self, now:Instant){
         self.last_seen=now
     }
@@ -239,7 +341,7 @@ impl Neighbor {
 
     pub fn has_timed_out(&self, now:Instant)->bool{
         // TODO: implement Time out const for neighbor
-        let time_out = self.last_seen+TIME_OUT;
+        let time_out = self.last_seen+ORIG_TIME_OUT;
 
         if now>time_out{
             return true;
