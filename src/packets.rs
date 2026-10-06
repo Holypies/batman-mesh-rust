@@ -19,10 +19,14 @@ pub const BATADV_UNICAST: u8 = 0x40;
 const OFF_TYPE: usize = 0;
 const OFF_VERSION: usize = 1;
 
+/// max value of tq
+const BATADV_TQ_MAX_VALUE:u32 = 255;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketError {
     TooShort { need: usize, got: usize },
     WrongType { expected: u8, got: u8 },
+    UnknownType,
     BadVersion(u8),
 }
 
@@ -54,6 +58,15 @@ fn need(got: usize, want: usize) -> Result<(), PacketError> {
     } else {
         Ok(())
     }
+}
+
+
+pub fn peek_type(buf: &[u8]) -> Option<u8> {
+    buf.get(OFF_TYPE).copied()
+}
+
+pub fn peek_version(buf: &[u8]) -> Option<u8> {
+    buf.get(OFF_VERSION).copied()
 }
 
 fn check_header(buf: &[u8], want: usize, packet_type: u8) -> Result<(), PacketError> {
@@ -124,6 +137,13 @@ impl BatmanAdvBroadcastPacket {
     pub fn originator(&self)->Mac{
         self.orig
     }
+    pub fn decrement_ttl(&mut self) -> bool {
+        if self.ttl < 2 {
+            return false;
+        }
+        self.ttl -= 1;
+        true
+    }
 
 }
 
@@ -175,12 +195,13 @@ pub struct BatmanAdvUnicastPacket {
 }
 
 impl BatmanAdvUnicastPacket {
-    pub fn new(dest: Mac, ttvn: u8) -> Self {
+    // TODO: add ttvn later
+    pub fn new(dest: Mac) -> Self {
         Self {
             packet_type: BATADV_UNICAST,
             version: BATADV_COMPAT_VERSION,
             ttl: BATADV_TTL,
-            ttvn,
+            ttvn:0,
             dest,
         }
     }
@@ -259,8 +280,6 @@ mod ogm_off {
     pub const TVLV_LEN: usize = 22;
 }
 
-/// Originator message. `tvlv_len` counts the octets of TVLV data that follow
-/// this 24-octet header, which is where translation table announcements ride.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatmanAdvOGMPacket {
     packet_type: u8,
@@ -274,7 +293,7 @@ pub struct BatmanAdvOGMPacket {
     tq: u8,
     tvlv_len: u16,
 }
-
+/// OGM Packet struct that will always be eth_header + OGM_header
 impl BatmanAdvOGMPacket {
     /// Builds a OGM packet originated by this node
     pub fn new(orig: Mac, seqno: u32) -> Self {
@@ -321,9 +340,9 @@ impl BatmanAdvOGMPacket {
     }
     /// The TVLV data following the header, or `None` when `buf` holds fewer
     /// octets than `tvlv_len` promises.
-    pub fn tvlv<'a>(&self, buf: &'a [u8]) -> Option<&'a [u8]> {
-        buf.get(Self::WIRE_LEN..self.total_len())
-    }
+   // pub fn tvlv<'a>(&self, buf: &'a [u8]) -> Option<&'a [u8]> {
+   //     buf.get(Self::WIRE_LEN..self.total_len())
+    //}
 
     pub fn tvlv_len(&self)->u16{
         self.tvlv_len
@@ -349,20 +368,12 @@ impl BatmanAdvOGMPacket {
         self.tq=tq
     }
 
-    /// Header plus the TVLV data that follows it.
-    pub fn total_len(&self) -> usize {
-        Self::WIRE_LEN + self.tvlv_len as usize
-    }
-
     pub fn apply_hop_penalty(&mut self, penalty:u8){
-        self.tq = self.tq*(255-penalty)/255;
+        self.tq = ((self.tq as u32)*((BATADV_TQ_MAX_VALUE-(penalty as u32)) as u32)/BATADV_TQ_MAX_VALUE) as u8;
     }
 
     pub fn set_prev_sender(&mut self, sender:Mac){
         self.prev_sender=sender
-    }
-    pub fn set_tvlv_len(&mut self, new:u16){
-        self.tvlv_len=new
     }
 
 }
@@ -388,6 +399,11 @@ impl Packet for BatmanAdvOGMPacket {
 
     fn parse(buf: &[u8]) -> Result<Self, PacketError> {
         check_header(buf, Self::WIRE_LEN, Self::PACKET_TYPE)?;
+        // check for non zero TVLV_LEN 
+        let tvlv_len = read_u16(buf, ogm_off::TVLV_LEN);
+        if tvlv_len != 0{
+            return Err(PacketError::UnknownType);
+        }
         Ok(Self {
             packet_type: buf[OFF_TYPE],
             version: buf[OFF_VERSION],
@@ -398,7 +414,7 @@ impl Packet for BatmanAdvOGMPacket {
             prev_sender: Mac::read_at(buf, ogm_off::PREV_SENDER),
             reserved: buf[ogm_off::RESERVED],
             tq: buf[ogm_off::TQ],
-            tvlv_len: read_u16(buf, ogm_off::TVLV_LEN),
+            tvlv_len,
         })
     }
 }
