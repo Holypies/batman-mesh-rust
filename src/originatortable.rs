@@ -1,18 +1,23 @@
+use crate::arrayvec::ArrayVec;
+use crate::originator::{Originator};
+use crate::mac::Mac;
+use crate::time::Instant;
+use crate::consts::MAX_NEIGHBORS;
 
 pub struct OriginatorTable{
-    list:ArrayVec<Originator,N>
+    list:ArrayVec<Originator,MAX_NEIGHBORS>
 
 }
 
 impl OriginatorTable{
     pub const fn new()->Self{
         Self{
-            list:ArrayVec::new(MAX_ORIG_TABLE_SIZE),
+            list:ArrayVec::new(),
         }
     }
     pub fn find_mac(&self, mac: Mac) -> Option<&Originator> {
         for originator in self.list.iter() {
-            if originator.mac == mac {
+            if originator.mac() == mac {
                 return Some(originator);
             }
         }
@@ -20,14 +25,15 @@ impl OriginatorTable{
     }
      pub fn find_mac_mut(&mut self, mac: Mac) -> Option<&mut Originator> {
         for originator in self.list.iter_mut() {
-            if originator.mac == mac {
+            if originator.mac() == mac {
                 return Some(originator);
             }
         }
         None
     }
-    pub fn add(&mut self, orig: Originator, now: Instant){
-        if self.list.id_full(){
+    
+    pub fn add(&mut self, mut orig:Originator, now: Instant){
+        if self.list.is_full(){
             return;
         }
         let new_mac = orig.mac();
@@ -41,55 +47,90 @@ impl OriginatorTable{
         orig.touch(now);
         self.list.push(orig);
     }
-    pub fn remove(&mut self, orig:Originator){
-        let index = self.list.position();
+    // TODO: fix remove
+    pub fn remove_mac(&mut self, mac: Mac) -> Option<Originator> {
+        let i: usize = self.list.iter().position(|o| o.mac() == mac)?;
+        self.list.swap_remove(i)
     }
 
     pub fn select_router(&self, orig_mac: Mac,candidate_mac: Mac)->bool{
-        let originator = match self.find_mac(orig) {
+        let originator = match self.find_mac(orig_mac) {
             Some(entry) => entry,
-            None => return false,
+            Option::None => return false,
         };
         
-        let candidate_path = match originator.neighbor(candidate) {
+        let candidate_path = match originator.find_neighbor(candidate_mac) {
             Some(path) => path,
-            None => return false,
+            Option::None => return false,
         };
         
-        let router_mac = match originator.router {
+        let router_mac = match originator.router_id() {
             Some(mac) => mac,
-            None => return true,
+            Option::None => return true,
         };
-        if router_mac == candidate {
+        if router_mac == candidate_mac {
             return false;
         }
-        let router_path = match originator.neighbor(router_mac) {
+        let router_path = match originator.find_neighbor(router_mac) {
             Some(path) => path,
-            None => return true,
+            Option::None => return true,
         };
        
         
  
         // Compare path quality, higher wins
-        if candidate_path.tq_avg > router_path.tq_avg {
+        if candidate_path.tq_avg() == 0 && router_path.tq_avg() == 0 {
+            return false;
+        }
+        if candidate_path.tq_avg() > router_path.tq_avg() {
             return true;
         }
-        if candidate_path.tq_avg < router_path.tq_avg {
+        if candidate_path.tq_avg() < router_path.tq_avg() {
             return false;
         }
  
         // Equal quality: prefer the link that echoes more of our OGMs.
         // The router keeps ties so equal neighbors don't take turns.
-        self.echo_sum(candidate) > self.echo_sum(router_mac)
+        
+
+        self.echo_sum(candidate_mac) > self.echo_sum(router_mac)
+
+
 
     }
-    pub fn next_hop(&self, dest_mac:Mac)-> Option<Mac>{
-        let dest_orig = self.find_mac(dest);
-        dest_orig.router_id()
 
+    fn echo_sum(&self, mac:Mac)->u8{
+        let originator = match self.find_mac(mac) {
+            Some(entry) => entry,
+            Option::None => return 0,
+        };
+        originator.echo()
     }
+
+    pub fn next_hop(&self, dest_mac: Mac) -> Option<Mac> {
+        self.find_mac(dest_mac)?.router_id()
+    }
+
     pub fn purge_all(&mut self){
-
+        self.list.clear();
     }
+
+    pub fn purge(&mut self, now: Instant) {
+        let mut i: usize = 0;
+        while i < self.list.len() {
+            let timed_out: bool = self.list.get(i).is_some_and(|orig| orig.has_timed_out(now));
+
+            if timed_out {
+                // swap_remove moves the last entry into slot i, so don't
+                // advance
+                let _ = self.list.swap_remove(i);
+            } else {
+                if let Some(orig) = self.list.get_mut(i) {
+                    orig.purge_timed_out_neighbors(now);
+                }
+                i += 1;
+            }
+        }
+}
 
 }
