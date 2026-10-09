@@ -2,7 +2,7 @@ use crate::PacketError::BadVersion;
 use crate::consts::{};
 use crate::bitwindow::WindowCheck::Accept;
 use crate::time::Instant;
-use crate::{HardInterface, LinkDriver, PacketError, ogm};
+use crate::{HardInterface, LinkDriver, PacketError, broadcast, ogm};
 use crate::eth::{EthHeader, EthError};
 use crate::mac::Mac;
 use crate::originatortable::OriginatorTable;
@@ -10,6 +10,8 @@ use crate::packets::{ETH_P_BATMAN, peek_type};
 use crate::framebuffer::FrameError;
 use crate::packets::peek_version;
 use crate::packets::{BATADV_COMPAT_VERSION, BATADV_IV_OGM, BATADV_BCAST, BATADV_UNICAST};
+use crate::broadcast::process_bcast;
+
 
 
 pub const MAX_MESH_NODES:usize=8;
@@ -17,6 +19,7 @@ pub const MAX_MESH_NODES:usize=8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropReason {
+    InvalidBcast,
     NotActive,
     TooShort,
     NotBatman(u16),
@@ -33,7 +36,11 @@ pub enum DropReason {
     //Interface(InterfaceError),
 }
 
-
+impl From<PacketError> for DropReason {
+    fn from(e: PacketError) -> Self {
+        DropReason::Packet(e)
+    }
+}
 
 
 pub struct MeshCtx<D:LinkDriver>{
@@ -54,7 +61,7 @@ impl<D:LinkDriver> MeshCtx<D> {
             orig_addr: Mac::from_octets(zero_octets),
             software_mac:Mac::from_octets(zero_octets),
             orig_table: OriginatorTable::new(),
-            hard_iface:HardInterface,
+            hard_iface:HardInterface<D>,
             //trans_table: TranslationTable::new(),
             ttvn:0,
             mesh_active: false,
@@ -79,7 +86,7 @@ impl<D:LinkDriver> MeshCtx<D> {
 
     }
 
-    pub fn handle_frame<'f>(&mut self, interface_id:u8, frame: &'f[u8], now:Instant)->Result<(),DropReason>{
+    pub fn handle_frame<'f>(&mut self, interface_id:u8, frame: &'f[u8], now:Instant)->Result<Option<&'f[u8]>,DropReason>{
         self.hard_iface.record_rx(frame.len());
 
 
@@ -140,7 +147,7 @@ impl<D:LinkDriver> MeshCtx<D> {
                     self.hard_iface.record_rx_dropped();
                     return Err(DropReason::WrongDestination);
                 }
-                ogm::process_ogm(
+                let ethernet_payload=ogm::process_ogm(
                     &mut self.hard_iface,
                     &mut self.orig_table,
                     eth_header.source(),
@@ -148,7 +155,7 @@ impl<D:LinkDriver> MeshCtx<D> {
                     now
                 );
 
-                return Ok(());
+                return Ok(None);
 
             },
             Some(BATADV_BCAST) =>{
@@ -156,11 +163,14 @@ impl<D:LinkDriver> MeshCtx<D> {
                     self.hard_iface.record_rx_dropped();
                     return Err(DropReason::WrongDestination);
                 }
-                bcast::process_bcast(
-                    
-                );
+                let ethernet_payload = broadcast::process_bcast(
+                    &mut self.hard_iface, 
+                    &mut self.orig_table, 
+                    &mut frame, 
+                    now
+                )?;
 
-                return Ok(());
+                return Ok(Some(ethernet_payload));
             },
             Some(BATADV_UNICAST) => {
                 if eth_header.dest() != self.orig_addr {
@@ -168,11 +178,15 @@ impl<D:LinkDriver> MeshCtx<D> {
                     return Err(DropReason::WrongDestination);
                 }
             
-                unicast::process_unicast(
-                    
-                );
+                let ethernet_payload = unicast::process_unicast(
+                    &mut self.hard_iface,
+                    &mut self.orig_table,
+                    eth_header.source(),
+                    payload,
+                    now
+                )?;
 
-                return Ok(());
+                return Ok(Some(ethernet_payload));
 
 
             }
