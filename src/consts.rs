@@ -14,8 +14,9 @@ pub const ORIG_INTER:Duration = secs(1);                // 1 sec
 pub const JITTER:Duration = millis(20);             // 20 ms
 pub const REBORADCAST_INTER:Duration = millis(5);   // 5 ms
 
+
 // BATMAN hop consts
-pub const HOP_PENALTY:usize = 30;
+pub const HOP_PENALTY:u8 = 30;
 pub const TIME_TO_LIVE:usize = 50;
 
 // constants for ethernet header
@@ -24,6 +25,7 @@ pub const ETH_VLAN_HLEN:usize = 18;
 pub const ETH_P_8021Q:u16 = 0x8100;
 pub const VLAN_VID_MASK:u16= 0x0FFF;
 
+
 // const for framebuffer
 pub const HEADROOM:usize = 28;
 
@@ -31,3 +33,8 @@ pub const HEADROOM:usize = 28;
 pub const NUM_BCASTS_WIRED: u8 = 1;
 pub const NUM_BCASTS_WIRELESS: u8 = 3;
 pub const NUM_BCASTS_MAX: u8 = 3;
+
+// Originator consts
+pub const MAX_NEIGHBORS:usize = 8;
+pub const MAX_ORIG_TABLE_SIZE: usize = 8;
+pub const ORIG_TIME_OUT:Duration = secs(200);

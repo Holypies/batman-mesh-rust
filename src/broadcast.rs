@@ -30,14 +30,12 @@ pub fn process_bcast<'f, D: LinkDriver>(
  
     match classify_bcast(my_mac, &frame[ETH_HLEN..]) {
         BroadcastType::Invalid => {
-            hardif.record_rx_dropped();
             return Err(DropReason::InvalidBcast);
         }
         BroadcastType::Normal { mut bcast } => {
             let sender_orig = match orig_table.find_mac_mut(bcast.originator()) {
                 Some(orig) => orig,
                 Option::None => {
-                    hardif.record_rx_dropped();
                     return Err(DropReason::UnknownOriginator);
                 }
             };
@@ -45,7 +43,6 @@ pub fn process_bcast<'f, D: LinkDriver>(
             let is_not_dup = sender_orig.check_bcast(bcast.seqno(), now);
  
             if !is_not_dup {
-                hardif.record_rx_dropped();
                 return Err(DropReason::Duplicate);
             }
  

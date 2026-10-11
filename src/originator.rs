@@ -3,15 +3,27 @@ use crate::bitwindow::WindowCheck::Protected;
 use crate::bitwindow::{BitWindow, BitWindowResult, WindowCheck, signed_diff, window_protection};
 use crate::consts::{MAX_NEIGHBORS, TQ_RING_SIZE, WINDOW_SIZE, ORIG_TIME_OUT};
 use crate::mac::Mac;
+use crate::meshctx::DropReason;
 use crate::time::Instant;
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginatorError {
+    NeighborListFull,
+    ZeroTq,
+    UnknownNeighbor,
+
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Originator{
     mac: Mac,
     last_seen:Instant,
     router_id:Option<Mac>,
     last_seqno:u32,
     last_ttl:u8,
-    last_seqno_forwarded:Option<u32>,
+    // last_seqno_forwarded:Option<u32>, should not be needed here, but is saved in case
     time_seqno_reset:Option<Instant>,
     echo: BitWindow,
     bcast_bits:BitWindow,
@@ -20,6 +32,8 @@ pub struct Originator{
     neighbors:ArrayVec<Neighbor,MAX_NEIGHBORS>,
     last_ttvn:u8,
 }
+
+
 
 impl Originator {
     // TODO: Implement new()
@@ -30,7 +44,7 @@ impl Originator {
             router_id:None,
             last_seqno:0,
             last_ttl:0,
-            last_seqno_forwarded:None,
+          //  last_seqno_forwarded:None,
             time_seqno_reset:None,
             echo:BitWindow::new(),
             bcast_bits:BitWindow::new(),
@@ -56,9 +70,9 @@ impl Originator {
     pub fn last_ttl(&self)->u8{
         self.last_ttl
     }
-    pub fn last_seqno_forwarded(&self)->Option<u32>{
-        self.last_seqno_forwarded
-    }
+   // pub fn last_seqno_forwarded(&self)->Option<u32>{
+   //     self.last_seqno_forwarded
+   // }
     pub fn time_seqno_reset(&self)->Option<Instant>{
         self.time_seqno_reset
     }
@@ -89,31 +103,29 @@ impl Originator {
     pub fn set_last_ttvn(&mut self, ttvn:u8){
         self.last_ttvn = ttvn
     }
-    pub fn set_last_seqno_forwarded(&mut self, last_seqno:u32){
-        self.last_seqno_forwarded = Some(last_seqno);
-    }
+   // pub fn set_last_seqno_forwarded(&mut self, last_seqno:u32){
+   //     self.last_seqno_forwarded = Some(last_seqno);
+   // }
 
 
     // --- functions ---
-    pub fn add_neighbor(&mut self, neigh:Neighbor, now:Instant){
+    // TODO: fix .unwrap(); to match for panic free code
+    pub fn add_neighbor(&mut self, mut neigh:Neighbor, now:Instant)->Result<(),OriginatorError>{
          if self.neighbors.is_full(){
-            return;
+            return Err(OriginatorError::NeighborListFull);
         }
         let new_mac = neigh.addr();
-        for slot in &self.neighbors[..self.neighbors.len()]{
-            if let Some(item) = slot {
-                if item.mac == new_mac{
-                    return;
-                }
-            }
+        if self.find_neighbor(new_mac)==None{
+            self.neighbors.push(neigh).unwrap();
         }
         neigh.touch(now);
-        self.neighbors.push(neigh);
+        Ok(())
     }
 
     pub fn touch(&mut self, now:Instant){
         self.last_seen=now
     }
+
     pub fn find_neighbor(&self, addr:Mac)->Option<&Neighbor>{
         for neighbor in self.neighbors.iter() {
             if neighbor.addr == addr {
@@ -157,9 +169,20 @@ impl Originator {
         let mut status: BitWindowResult = BitWindowResult::New;
         let mut window_moved: bool = false;
 
+        let  :bool = match self.find_neighbor_mut(sender){
+            Some(neighbor)=> true,
+            None => false,
+
+        }
+
+
+
         for neighbor in self.neighbors.iter_mut() {
+
             let is_sender = neighbor.addr() == sender;
+
             if neighbor.is_duplicate(self.last_seqno, seqno){
+
                 if is_sender {
                     status = BitWindowResult::NeighDup;
 
@@ -228,6 +251,9 @@ impl Originator {
                 best_neighbor = neighbor;
             }
         }
+        if best_neighbor.tq.avg() == 0{
+            return None;
+        }
         Some(best_neighbor.addr())
     }
 
@@ -269,6 +295,13 @@ impl Originator {
         return false;
     }
 
+    pub fn update_new_ogm_tq(&mut self, mac:Mac){
+        for neigh in self.neighbors.iter_mut(){
+            if neigh.addr()!=mac{
+                neigh.record_transmit_quality(0);
+            }
+        }
+    }
 
 
 }
@@ -315,7 +348,7 @@ impl Neighbor {
     }
 
     // --- functions---
-    pub fn avg_tq(&self)->u8{
+    pub fn tq_avg(&self)->u8{
         self.tq.avg()
     }
 

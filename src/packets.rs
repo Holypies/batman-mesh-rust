@@ -25,7 +25,7 @@ const BATADV_TQ_MAX_VALUE:u32 = 255;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketError {
     TooShort { need: usize, got: usize },
-    WrongType { expected: u8, got: u8 },
+    WrongType { expected: u16, got: u16 },
     UnknownType,
     BadVersion(u8),
 }
@@ -348,12 +348,18 @@ impl BatmanAdvOGMPacket {
         self.tvlv_len
     }
 
-    pub fn set_flag(&mut self, flags:u8){
-        self.flags=flags;
+    pub fn set_flag(&mut self, flag: u8) {
+        self.flags |= flag;
     }
 
-    pub fn clear_flag(&mut self){
+    pub fn clear_flag(&mut self, flag: u8) {
+        self.flags &= !flag;
+    }
+    pub fn clear_flags(&mut self){
         self.flags=0
+    }
+    pub fn has_flag(&self, flag: u8) -> bool {
+        (self.flags & flag) == flag
     }
 
     pub fn decrement_ttl(&mut self) -> bool {

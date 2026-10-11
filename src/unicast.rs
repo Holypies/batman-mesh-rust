@@ -22,16 +22,15 @@ pub fn process_unicast<'f, D: LinkDriver>(
     hardif: &mut HardInterface<D>,
     orig_table: &mut OriginatorTable,
     frame: &'f mut [u8],
-    now: Instant,
+   // now: Instant,             might be needed later 
 ) -> Result<Option<&'f [u8]>, DropReason> {
     let my_mac: Mac = hardif.hardware_addr();
  
     match classify_unicast(my_mac, &frame[ETH_HLEN..]) {
         
         UnicastType::Invalid => {
-            hardif.record_rx_dropped();
             return Err(DropReason::InvalidUnicast);
-        }
+        },
         UnicastType::ForMe => {
             // return only the ethernet frame playload
             let frame: &'f [u8] = frame;
@@ -40,15 +39,13 @@ pub fn process_unicast<'f, D: LinkDriver>(
         UnicastType::Forward { mut unicast } => {
             
             if !unicast.decrement_ttl() {
-                hardif.record_rx_dropped();
                 return Err(DropReason::TtlExceeded);
             }
 
-            // find 
+            // find destination in orig table
             let dest_orig = match orig_table.find_mac(unicast.dest()) {
                 Some(orig) => orig,
                 Option::None => {
-                    hardif.record_rx_dropped();
                     return Err(DropReason::NoRoute);
                 }
             };
@@ -57,13 +54,10 @@ pub fn process_unicast<'f, D: LinkDriver>(
             let router_mac = match dest_orig.router_id() {
                 Some(mac) => mac,
                 Option::None => {
-                    hardif.record_rx_dropped();
                     return Err(DropReason::NoRoute);
                 }
             };
 
- 
-            
             // write payload
             unicast.write(&mut frame[ETH_HLEN..])?;
 

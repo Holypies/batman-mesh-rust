@@ -1,13 +1,11 @@
 use crate::PacketError::BadVersion;
-use crate::consts::{};
-use crate::bitwindow::WindowCheck::Accept;
 use crate::time::Instant;
-use crate::{HardInterface, LinkDriver, PacketError, broadcast, ogm};
+use crate::{HardInterface, LinkDriver, PacketError, broadcast, ogm, unicast};
 use crate::eth::{EthHeader, EthError};
 use crate::mac::Mac;
-use crate::originatortable::OriginatorTable;
+use crate::originatortable::{OriginatorTable, OriginatorTableError};
+use crate::originator::{OriginatorError, Originator};
 use crate::packets::{ETH_P_BATMAN, peek_type};
-use crate::framebuffer::FrameError;
 use crate::packets::peek_version;
 use crate::packets::{BATADV_COMPAT_VERSION, BATADV_IV_OGM, BATADV_BCAST, BATADV_UNICAST};
 use crate::broadcast::process_bcast;
@@ -33,12 +31,26 @@ pub enum DropReason {
     UnknownOriginator,
     NoRoute,
     TtlExceeded,
+    InvalidUnicast,
     //Interface(InterfaceError),
+    OriginatorTable(OriginatorTableError),
+    Originator(OriginatorError),
+    Protected,
 }
 
 impl From<PacketError> for DropReason {
     fn from(e: PacketError) -> Self {
         DropReason::Packet(e)
+    }
+}
+impl From<OriginatorTableError> for DropReason {
+    fn from(e: OriginatorTableError) -> Self {
+        DropReason::OriginatorTable(e)
+    }
+}
+impl From<OriginatorError> for DropReason {
+    fn from(e: OriginatorError) -> Self {
+        DropReason::Originator(e)
     }
 }
 
@@ -147,14 +159,19 @@ impl<D:LinkDriver> MeshCtx<D> {
                     self.hard_iface.record_rx_dropped();
                     return Err(DropReason::WrongDestination);
                 }
-                let ethernet_payload=ogm::process_ogm(
+                match ogm::process_ogm(
                     &mut self.hard_iface,
                     &mut self.orig_table,
                     eth_header.source(),
                     payload,
-                    now
-                );
-
+                    now,
+                ) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        self.hard_iface.record_rx_dropped();
+                        return Err(e);
+                    }
+                }
                 return Ok(None);
 
             },
@@ -163,13 +180,18 @@ impl<D:LinkDriver> MeshCtx<D> {
                     self.hard_iface.record_rx_dropped();
                     return Err(DropReason::WrongDestination);
                 }
-                let ethernet_payload = broadcast::process_bcast(
-                    &mut self.hard_iface, 
-                    &mut self.orig_table, 
-                    &mut frame, 
-                    now
-                )?;
-
+                let ethernet_payload = match broadcast::process_bcast(
+                    &mut self.hard_iface,
+                    &mut self.orig_table,
+                    &mut frame,
+                    now,
+                ) {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        self.hard_iface.record_rx_dropped();
+                        return Err(e);
+                    }
+                };
                 return Ok(Some(ethernet_payload));
             },
             Some(BATADV_UNICAST) => {
@@ -178,15 +200,18 @@ impl<D:LinkDriver> MeshCtx<D> {
                     return Err(DropReason::WrongDestination);
                 }
             
-                let ethernet_payload = unicast::process_unicast(
+                let ethernet_payload = match unicast::process_unicast(
                     &mut self.hard_iface,
                     &mut self.orig_table,
-                    eth_header.source(),
-                    payload,
-                    now
-                )?;
-
-                return Ok(Some(ethernet_payload));
+                    &mut frame,
+                ) {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        self.hard_iface.record_rx_dropped();
+                        return Err(e);
+                    }
+                };
+                return Ok(ethernet_payload);
 
 
             }

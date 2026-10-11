@@ -4,6 +4,15 @@ use crate::mac::Mac;
 use crate::time::Instant;
 use crate::consts::MAX_NEIGHBORS;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginatorTableError {
+    TableFull,
+    Protected,
+    NotBestNextHop,
+    AlreadyInTable
+}
+
+
 pub struct OriginatorTable{
     list:ArrayVec<Originator,MAX_NEIGHBORS>
 
@@ -32,20 +41,21 @@ impl OriginatorTable{
         None
     }
     
-    pub fn add(&mut self, mut orig:Originator, now: Instant){
+    pub fn add(&mut self, mut orig:Originator, now: Instant)->Result<(), OriginatorTableError>{
         if self.list.is_full(){
-            return;
+            return Err(OriginatorTableError::TableFull);
         }
         let new_mac = orig.mac();
         for slot in &self.list[..self.list.len()]{
             if let Some(item) = slot {
                 if item.mac == new_mac{
-                    return;
+                    return Err(OriginatorTableError::AlreadyInTable);
                 }
             }
         }
         orig.touch(now);
         self.list.push(orig);
+        Ok(())
     }
     // TODO: fix remove
     pub fn remove_mac(&mut self, mac: Mac) -> Option<Originator> {
@@ -131,6 +141,12 @@ impl OriginatorTable{
                 i += 1;
             }
         }
-}
+    }
+
+    pub fn slide_echo_windows(&mut self) {
+        for orig in self.list.iter_mut() {
+            orig.slide_echo_window();
+        }
+    }
 
 }
