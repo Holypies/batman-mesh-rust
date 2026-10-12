@@ -57,6 +57,8 @@ pub enum TransmitionError{
     FrameBuffer(FrameError),
     Packet(PacketError),
     HardInterface(InterfaceError),
+    InvalidDestination,
+    NoRoute,
 
 }
 impl From<PacketError> for TransmitionError {

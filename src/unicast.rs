@@ -1,12 +1,13 @@
 use crate::packets::{Packet, BatmanAdvUnicastPacket, ETH_P_BATMAN};
-use crate::meshctx::DropReason;
+use crate::meshctx::{DropReason, TransmitionError};
 use crate::hardif::{HardInterface, LinkDriver};
 use crate::originatortable::OriginatorTable;
-use crate::time::Instant;
 use crate::mac::Mac;
-use crate::consts::ETH_HLEN;
+use crate::consts::{ETH_HLEN, UNICAST_HEADROOM, MAX_BATMAN_FRAME_SIZE};
+use crate::broadcast::pad_to_min_frame;
 use crate::eth::EthHeader;
-
+use crate::framebuffer::{FrameBuffer, FrameError::TooLarge};
+use crate::hardif::InterfaceError::InterfaceDown;
 
 const UNICAST_INNER_OFFSET: usize = ETH_HLEN + BatmanAdvUnicastPacket::WIRE_LEN;
 pub enum UnicastType {
@@ -86,7 +87,7 @@ pub fn classify_unicast(my_mac: Mac, payload: &[u8]) -> UnicastType {
     };
 
     // check if empty 
-    if payload.len()<14{
+    if payload.len()<UNICAST_INNER_OFFSET{
         return UnicastType::Invalid;
     }
     // check if valid mac
@@ -106,4 +107,73 @@ pub fn classify_unicast(my_mac: Mac, payload: &[u8]) -> UnicastType {
 
 
 
-pub fn send_unicast(){}
+pub fn send_unicast<D:LinkDriver>(
+    hardif: &mut HardInterface<D>,
+    orig_table: &OriginatorTable,
+    buffer: &mut FrameBuffer<MAX_BATMAN_FRAME_SIZE, UNICAST_HEADROOM>,
+    eth_frame: &[u8],
+)->Result<(),TransmitionError>{
+    if !hardif.is_up(){
+        return Err(TransmitionError::HardInterface(InterfaceDown));
+    }
+    
+    let my_mac: Mac = hardif.hardware_addr();
+
+    // parse the inner header for its destination
+    let dest: Mac = EthHeader::parse(eth_frame)?.dest();
+ 
+    // error if it wants to send it to itself
+    if dest == my_mac {
+        return Err(TransmitionError::InvalidDestination);
+    }
+ 
+    // find next hop 
+    let next_hop: Mac = match orig_table.find_mac(dest) {
+        Some(orig) => match orig.router_id() {
+            Some(router) => router,
+            Option::None => return Err(TransmitionError::NoRoute),
+        },
+        Option::None => return Err(TransmitionError::NoRoute),
+    };
+
+    if (eth_frame.len() + UNICAST_INNER_OFFSET) > hardif.max_frame_len(){
+        return Err(TransmitionError::FrameBuffer(TooLarge));
+    } 
+
+    let unicast_header: BatmanAdvUnicastPacket = BatmanAdvUnicastPacket::new(dest);
+     
+    match build_unicast_frame(unicast_header, next_hop, my_mac, eth_frame, buffer){
+        Ok(())=>{
+            match hardif.transmit(buffer.bytes()){
+                Ok(()) => Ok(()),
+                Err(e)=> return Err(TransmitionError::HardInterface(e)),
+            }
+        },
+        Err(err)=>return Err(err),
+    }
+
+
+}
+
+
+pub fn build_unicast_frame(
+    unicast_header: BatmanAdvUnicastPacket,
+    next_hop: Mac,
+    source_mac: Mac,
+    eth_frame: &[u8],
+    buffer: &mut FrameBuffer<MAX_BATMAN_FRAME_SIZE, UNICAST_HEADROOM>,
+) -> Result<(), TransmitionError> {
+    buffer.reset_cursors();
+ 
+    buffer.append(eth_frame.len())?.copy_from_slice(eth_frame);
+ 
+    let buf: &mut [u8] = buffer.prepend(BatmanAdvUnicastPacket::WIRE_LEN)?;
+    unicast_header.write(buf)?;
+ 
+    let eth_slot = buffer.prepend(ETH_HLEN)?;
+    let eth_header: EthHeader = EthHeader::new(next_hop, source_mac, ETH_P_BATMAN);
+    eth_header.write(eth_slot)?;
+ 
+    pad_to_min_frame(buffer)?;
+    Ok(())
+}

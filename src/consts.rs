@@ -40,12 +40,16 @@ pub const ORIG_TIME_OUT:Duration = secs(200);
 
 
 // BATMAN MESSAGE CONSTS
-pub const MAX_SENT_FRAME_LEN:usize = 1486;
 pub const MIN_ETH_FRAME_SIZE:usize = 60;
+pub const MAX_BATMAN_FRAME_SIZE:usize=1514;
+
 // Unicast frame consts
+pub const UNICAST_INNER_OFFSET:usize = 24;
+pub const UNICAST_HEADROOM:usize= 24;
+pub const UNICAST_INNER_FRAME_LEN:usize = 1490;
 
 // Broadcast frames constats
 pub const BCAST_INNER_OFFSET:usize = 28;
-pub const BCAST_FRAME_LEN:usize = 1514;
 pub const BCAST_HEADROOM:usize=28;
+pub const BCAST_INNER_FRAME_LEN:usize = 1486;
 //  
