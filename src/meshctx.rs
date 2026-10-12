@@ -1,6 +1,6 @@
 use crate::PacketError::BadVersion;
 use crate::time::Instant;
-use crate::{HardInterface, LinkDriver, PacketError, broadcast, ogm, unicast};
+use crate::{FrameError, HardInterface, InterfaceError, LinkDriver, PacketError, broadcast, ogm, unicast};
 use crate::eth::{EthHeader, EthError};
 use crate::mac::Mac;
 use crate::originatortable::{OriginatorTable, OriginatorTableError};
@@ -9,7 +9,6 @@ use crate::packets::{ETH_P_BATMAN, peek_type};
 use crate::packets::peek_version;
 use crate::packets::{BATADV_COMPAT_VERSION, BATADV_IV_OGM, BATADV_BCAST, BATADV_UNICAST};
 use crate::broadcast::process_bcast;
-
 
 
 pub const MAX_MESH_NODES:usize=8;
@@ -37,7 +36,6 @@ pub enum DropReason {
     Originator(OriginatorError),
     Protected,
 }
-
 impl From<PacketError> for DropReason {
     fn from(e: PacketError) -> Self {
         DropReason::Packet(e)
@@ -53,6 +51,31 @@ impl From<OriginatorError> for DropReason {
         DropReason::Originator(e)
     }
 }
+
+
+pub enum TransmitionError{
+    FrameBuffer(FrameError),
+    Packet(PacketError),
+    HardInterface(InterfaceError),
+
+}
+impl From<PacketError> for TransmitionError {
+    fn from(e: PacketError) -> Self {
+        TransmitionError::Packet(e)
+    }
+}
+impl From<FrameError> for TransmitionError {
+    fn from(e: FrameError) -> Self {
+        TransmitionError::FrameBuffer(e)
+    }
+}
+impl From<InterfaceError> for TransmitionError {
+    fn from(e: InterfaceError) -> Self {
+        TransmitionError::HardInterface(e)
+    }
+}
+
+
 
 
 pub struct MeshCtx<D:LinkDriver>{

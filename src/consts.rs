@@ -25,9 +25,8 @@ pub const ETH_VLAN_HLEN:usize = 18;
 pub const ETH_P_8021Q:u16 = 0x8100;
 pub const VLAN_VID_MASK:u16= 0x0FFF;
 
-
 // const for framebuffer
-pub const HEADROOM:usize = 28;
+pub const FRAMEBUF_HEADROOM:usize = 28;
 
 // reboradcasts
 pub const NUM_BCASTS_WIRED: u8 = 1;
@@ -38,3 +37,15 @@ pub const NUM_BCASTS_MAX: u8 = 3;
 pub const MAX_NEIGHBORS:usize = 8;
 pub const MAX_ORIG_TABLE_SIZE: usize = 8;
 pub const ORIG_TIME_OUT:Duration = secs(200);
+
+
+// BATMAN MESSAGE CONSTS
+pub const MAX_SENT_FRAME_LEN:usize = 1486;
+pub const MIN_ETH_FRAME_SIZE:usize = 60;
+// Unicast frame consts
+
+// Broadcast frames constats
+pub const BCAST_INNER_OFFSET:usize = 28;
+pub const BCAST_FRAME_LEN:usize = 1514;
+pub const BCAST_HEADROOM:usize=28;
+//  
