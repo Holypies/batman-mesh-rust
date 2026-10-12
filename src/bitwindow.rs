@@ -1,5 +1,5 @@
 use crate::consts::{SEQ_NO_RANGE,RESET_PROT, WINDOW_SIZE};
-use crate::time::Instant;
+use crate::time::{Instant, has_timed_out};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitWindowResult {
@@ -80,7 +80,7 @@ pub fn signed_diff(a:u32, b:u32)->i32{
 }
 
 pub fn seq_before(a:u32,b:u32)-> bool{
-    let diff = seq_signed_diff(a,b);
+    let diff = signed_diff(a,b);
     if diff >= 0{
         return false
     }
@@ -88,7 +88,7 @@ pub fn seq_before(a:u32,b:u32)-> bool{
 }
 
 pub fn seq_after(a:u32,b:u32)-> bool{
-    let diff = seq_signed_diff(a,b);
+    let diff = signed_diff(a,b);
     if diff > 0{
         return true
     }
@@ -116,12 +116,103 @@ pub fn window_protection(
     }
  
     if let Some(reset_at) = *last_reset {
-        if !reset_at.has_timed_out(RESET_PROT, now) {
+        if !has_timed_out(reset_at,RESET_PROT, now) {
             return WindowCheck::Protected;
         }
     }
  
     *last_reset = Some(now);
     WindowCheck::Reset
+}
+
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bitwindow_bits_test(){
+        let window = BitWindow(0x0000FFFF);
+        let val = window.bits();
+        assert_eq!(val,0x0000FFFF)
+    }
+
+    #[test]
+    fn bitwindow_new_test(){
+        let window = BitWindow::new();
+        assert_eq!(window.0,0);
+    }
+
+    #[test]
+    fn bitwindow_contains_test(){
+        let window = BitWindow(0x0000000F);
+        let last = 0xFFFF;
+        let seqno=0xFFF0;
+        assert_eq!(window.contains(last, seqno), true);
+
+        let seqno=0xFFFF;
+        assert_eq!(window.contains(last, seqno), false);
+    }
+    #[test]
+    fn bitwindow_set_test(){
+        let mut window = BitWindow(0);
+        window.set(0xFFFF);
+        assert_eq!(window.0,0xFFFF);
+    }
+    #[test]
+    fn window_protection_test() {
+        let ws = WINDOW_SIZE as i32;
+        let t0 = Instant::from_ticks(1_000u64);
+        let mut last = None;
+
+        assert_eq!(window_protection(0, ws, &mut last, t0), WindowCheck::Accept);
+        assert_eq!(last, None);
+
+        assert_eq!(window_protection(-ws, ws, &mut last, t0), WindowCheck::Reset);
+        assert_eq!(last, Some(t0));
+
+        assert_eq!(window_protection(-ws, ws, &mut last, t0), WindowCheck::Protected);
+
+        let t1 = t0 + RESET_PROT * 2;
+        assert_eq!(window_protection(-ws, ws, &mut last, t1), WindowCheck::Reset);
+        assert_eq!(last, Some(t1));
+    }
+    #[test]
+    fn bitwindow_count_test(){
+        let window = BitWindow(0);
+        let a = window.count();
+        assert_eq!(a,0);
+        let window1 = BitWindow(0x000F00F0);
+        let b = window1.count();
+        assert_eq!(b,8);
+
+    }
+    #[test]
+    fn bitwindow_clear_test(){
+        let mut window = BitWindow(0xFFF0FFFA);
+        window.clear();
+        assert_eq!(window.0,0);
+    }
+    
+
+    #[test]
+    fn update_test() {
+        let mut window = BitWindow::new();
+
+        assert_eq!(window.update(0, true), false);
+        assert_eq!(window.bits(), 0x1);
+
+        assert_eq!(window.update(1, true), true);
+        assert_eq!(window.bits(), 0x3);
+
+        assert_eq!(window.update(-3, true), false);
+        assert_eq!(window.bits(), 0xB);
+
+        assert_eq!(window.update(WINDOW_SIZE as i32, true), true);
+        assert_eq!(window.bits(), 0x1);
+    }
+
 }
 
