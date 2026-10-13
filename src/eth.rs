@@ -6,6 +6,11 @@ use crate::consts::{ETH_HLEN,ETH_VLAN_HLEN, ETH_P_8021Q,VLAN_VID_MASK};
 
 pub const BATADV_VLAN_HAS_TAG:u16 = 1 << 15;
 
+pub enum EthError {
+    NotValidSource,
+    WrongType{expected: u16, got:u16},
+}
+
 // the index of the destination, source, and type in ethernet header
 mod offset{
     pub const ETH_DEST: usize = 0;
@@ -17,12 +22,14 @@ mod offset{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EthInfo{
-    pub(crate) header: EthHeader,
-    pub(crate) inner_type: u16,
-    pub(crate) vid: Option<u16>,
+    header: EthHeader,
+    inner_type: u16,
+    vid: Option<u16>,
     // either 14 or 18 depeniding on VLAN or not
-    pub(crate) hlen: usize,
+    hlen: usize,
 }
+
+
 impl EthInfo{
     pub fn payload<'a>(&self, buf: &'a [u8]) -> Result<&'a [u8], PacketError> {
         if buf.len() < self.hlen {
@@ -166,7 +173,10 @@ impl EthHeader{
 
 #[cfg(test)]
 mod test{
+    use crate::FrameBuffer;
     use super::*;
+
+    const buf:&[u8] =&[0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF]; 
 
     const DEST: Mac = Mac::from_octets([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
     const SOURCE: Mac = Mac::from_octets([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
@@ -206,7 +216,11 @@ mod test{
     #[test]
     fn parse_test(){
 
-       // let header: EthHeader = EthHeader::parse(buf);
+        let header = match EthHeader::parse(buf){
+
+        }
+
+
         
     }
 

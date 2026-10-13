@@ -211,7 +211,6 @@ impl BatmanAdvUnicastPacket {
     pub fn version(&self)->u8{
         self.version
     }
-    
 
     pub fn ttl(&self) -> u8 {
         self.ttl

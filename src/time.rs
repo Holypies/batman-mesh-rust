@@ -7,6 +7,10 @@ pub const TICK_HZ:u32 =1_000_000;
 pub type Instant = fugit::Instant<u64,1,TICK_HZ>;
 pub type Duration = fugit::Duration<u64,1,TICK_HZ>;
 
+
+
+pub const INSTANT_ZERO: Instant = Instant::from_ticks(0);
+
 // Takes u64 and returns duration of 'us' in microseconds 
 pub const fn micros(us:u64)->Duration{
     Duration::from_ticks(us)
@@ -56,6 +60,11 @@ pub const fn is_before(a: Instant, b: Instant) -> bool {
 pub const fn is_after(a: Instant, b: Instant) -> bool {
     a.ticks() > b.ticks()
 }
+
+pub const fn has_reached(a: Instant, b: Instant) -> bool {
+    a.ticks() >= b.ticks()
+}
+
 
 pub const fn has_timed_out(timestamp: Instant, timeout: Duration, now: Instant) -> bool {
     now.ticks() > timestamp.ticks().saturating_add(timeout.ticks())

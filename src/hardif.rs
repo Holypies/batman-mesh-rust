@@ -10,7 +10,7 @@ pub enum InterfaceError{
 }
 
 pub trait LinkDriver{
-    /// gives the har
+
     fn hardware_addr(&self)->Mac;
 
     fn payload_size(&self)->usize;
@@ -19,8 +19,6 @@ pub trait LinkDriver{
 
     fn transmit(&mut self, buf:&[u8])->Result<(),InterfaceError>;
 
-    fn is_wireless(&self)->bool;
-
 }
 
 pub struct HardInterface<D>{
@@ -28,19 +26,15 @@ pub struct HardInterface<D>{
     id:u8,
     hw_addr:Mac,
     wireless:bool,
-    // data after the 14-oclet header
     payload:usize,
     primary:bool,
     active:bool,
     ogm_seqno:u32,
     tx_frames: u32,
     tx_bytes: u32,
-    // frames dropped by the transiver
     tx_dropped:u32,
-    // frames accepted by the reciver
     rx_frames: u32,
     rx_bytes: u32,
-    // frames the reciver dropped
     rx_dropped: u32,
 }
 
@@ -181,7 +175,7 @@ impl <D:LinkDriver> HardInterface<D> {
         let max_len: usize = self.max_frame_len();
         if frame.len()>max_len{
             self.tx_dropped = self.tx_dropped.wrapping_add(1);
-            return Err(InterfaceError::FrameTooLarge { need: max_len, got: frame.len() });
+            return Err(InterfaceError::FrameTooLarge { max: max_len, got: frame.len() });
         }
         match self.driver.transmit(frame) {
             Ok(()) => {
@@ -202,15 +196,17 @@ impl <D:LinkDriver> HardInterface<D> {
         self.ogm_seqno = self.ogm_seqno.wrapping_add(1);
         seqno
     }
+
     pub fn record_rx(&mut self, len:usize){
         self.rx_frames = self.rx_frames.wrapping_add(1);
         self.rx_bytes = self.rx_bytes.wrapping_add(len as u32);
+    }
+    pub fn record_tx_dropped(&mut self){
+        self.tx_dropped = self.tx_dropped.wrapping_add(1);
     }
     pub fn record_rx_dropped(&mut self){
         self.rx_dropped = self.rx_dropped.wrapping_add(1);
     }
 
 }
-
-
 

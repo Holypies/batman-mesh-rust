@@ -91,7 +91,7 @@ pub fn send_own_ogm<D: LinkDriver>(
 pub fn classify_ogm(my_mac: Mac, neighbor_mac: Mac, payload: &[u8]) -> OgmType {
     let ogm = match BatmanAdvOGMPacket::parse(payload) {
         Ok(ogm) => ogm,
-        Err(e) => return OgmType::Invalid,
+        Err(_e) => return OgmType::Invalid,
     };
  
     let orig = ogm.originator();
@@ -180,7 +180,9 @@ pub fn process_ogm<D: LinkDriver>(
  
             let from_best_next_hop = is_router && router_alive;
  
-            let Some(neigh_orig) = orig_table.find_mac(neighbor_mac) else { return Err(DropReason::Originator(UnknownNeighbor)) };
+            let Some(neigh_orig) = orig_table.find_mac(neighbor_mac) else { 
+                return Err(DropReason::Originator(UnknownNeighbor)) 
+            };
  
             // check if neighbor is known
             if !single_hop && (!neigh_orig.router_id().is_some()){
@@ -262,7 +264,7 @@ fn calc_tq(tq_in: u8, echo_count: u8, receive_count: u8) -> u8 {
     const WINDOW: u32 = WINDOW_SIZE as u32;
  
     let receive_count = (receive_count as u32).min(WINDOW);
-    // More echoes than received OGMs would give a TQ_local above 100 %.
+    // more echoes than received OGMs would give a TQ_local above 100 %.
     let echo_count = (echo_count as u32).min(receive_count);
  
     if receive_count == 0 || echo_count == 0 {
@@ -314,7 +316,7 @@ fn ensure_neighbor(
     if orig.find_neighbor(mac).is_some() {
         match orig.find_neighbor_mut(mac){
             Some(neigh) => neigh.touch(now),
-            None=>{},
+            Option::None=>{},
         };
         
         return Ok(());

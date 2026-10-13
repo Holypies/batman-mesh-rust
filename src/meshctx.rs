@@ -1,5 +1,6 @@
 use crate::PacketError::BadVersion;
-use crate::time::Instant;
+use crate::ogm::send_own_ogm;
+use crate::time::{self, INSTANT_ZERO, Instant};
 use crate::{FrameError, HardInterface, InterfaceError, LinkDriver, PacketError, broadcast, ogm, unicast};
 use crate::eth::{EthHeader, EthError};
 use crate::mac::Mac;
@@ -9,7 +10,7 @@ use crate::packets::{ETH_P_BATMAN, peek_type};
 use crate::packets::peek_version;
 use crate::packets::{BATADV_COMPAT_VERSION, BATADV_IV_OGM, BATADV_BCAST, BATADV_UNICAST};
 use crate::broadcast::process_bcast;
-
+use crate::consts::{BCAST_INNER_FRAME_LEN, ETH_HLEN, ETH_P_8021Q, ORIG_INTER, PURGE_PERIOD, UNICAST_INNER_FRAME_LEN};
 
 pub const MAX_MESH_NODES:usize=8;
 
@@ -59,6 +60,11 @@ pub enum TransmitionError{
     HardInterface(InterfaceError),
     InvalidDestination,
     NoRoute,
+    MeshNotActive,
+    TooShort,
+    VlanTagged,
+    InvalidSource,
+    TooLong
 
 }
 impl From<PacketError> for TransmitionError {
@@ -78,31 +84,31 @@ impl From<InterfaceError> for TransmitionError {
 }
 
 
-
-
 pub struct MeshCtx<D:LinkDriver>{
     orig_addr: Mac,
-    software_mac:Mac,
+   // software_mac:Mac,                 Needed for TranslationTable
     orig_table: OriginatorTable,
     hard_iface:HardInterface<D>,
-  //  trans_table: TranslationTable,
-    ttvn:u8,
+  //  trans_table: TranslationTable,    Needed for TranslationTable
+  //  ttvn:u8,                          Needed for TranslationTable
     mesh_active: bool,
     bcast_seqno: u32,
+    next_ogm:Instant,
+    next_purge:Instant,
 }
 
 impl<D:LinkDriver> MeshCtx<D> {
-    pub const fn new()->Self{
-        let zero_octets:[u8;6] = [0u8;6];
+    pub fn new(hardif:HardInterface<D>)->Self{
         Self{
-            orig_addr: Mac::from_octets(zero_octets),
-            software_mac:Mac::from_octets(zero_octets),
+            orig_addr: hardif.hardware_addr(),
             orig_table: OriginatorTable::new(),
-            hard_iface:HardInterface<D>,
+            hard_iface:hardif,
             //trans_table: TranslationTable::new(),
-            ttvn:0,
+            //ttvn:0,
             mesh_active: false,
             bcast_seqno: 0,
+            next_ogm:INSTANT_ZERO,
+            next_purge:INSTANT_ZERO,
         }
     }
 
@@ -113,17 +119,20 @@ impl<D:LinkDriver> MeshCtx<D> {
 
     } 
 
-    pub fn activate(&mut self, time:u32){
+    pub fn activate(&mut self, now:Instant){
         self.mesh_active = true;
-
+        self.next_ogm=now;
+        self.next_purge= now+PURGE_PERIOD;
+        self.hard_iface.set_active(true);
     }
 
     pub fn deactivate(&mut self){
         self.mesh_active = false;
-
+        self.orig_table.purge_all();
+        self.hard_iface.set_active(false);
     }
 
-    pub fn handle_frame<'f>(&mut self, interface_id:u8, frame: &'f[u8], now:Instant)->Result<Option<&'f[u8]>,DropReason>{
+    pub fn handle_frame<'f>(&mut self, frame: &'f mut [u8], now:Instant)->Result<Option<&'f[u8]>,DropReason>{
         self.hard_iface.record_rx(frame.len());
 
 
@@ -137,6 +146,7 @@ impl<D:LinkDriver> MeshCtx<D> {
         let eth_header = match EthHeader::parse(frame){
             Ok(header) => header,
             Err(err) => {
+                self.hard_iface.record_rx_dropped();
                 return Err(DropReason::Packet(err));
             },
         };
@@ -160,13 +170,13 @@ impl<D:LinkDriver> MeshCtx<D> {
         }
 
             
-        let payload = &frame[&ETH_HLEN..];
+        let payload = &frame[ETH_HLEN..];
             
         match peek_version(payload) {
         // if option fails
             Option::None => {
                 self.hard_iface.record_rx_dropped();
-                return Err(DropReason::Packet(BadVersion(0)));
+                return Err(DropReason::TooShort);
             }
             // if version isnt supported
             Some(v) if v != BATADV_COMPAT_VERSION => {
@@ -177,7 +187,10 @@ impl<D:LinkDriver> MeshCtx<D> {
         }
 
         match peek_type(payload){
-            Option::None=>Err(DropReason::TooShort),
+            Option::None=>{
+                self.hard_iface.record_rx_dropped();
+                return Err(DropReason::TooShort)
+            },
             
             Some(BATADV_IV_OGM)=>{
                 if !eth_header.dest().is_broadcast(){
@@ -208,7 +221,7 @@ impl<D:LinkDriver> MeshCtx<D> {
                 let ethernet_payload = match broadcast::process_bcast(
                     &mut self.hard_iface,
                     &mut self.orig_table,
-                    &mut frame,
+                    frame,
                     now,
                 ) {
                     Ok(payload) => payload,
@@ -228,7 +241,7 @@ impl<D:LinkDriver> MeshCtx<D> {
                 let ethernet_payload = match unicast::process_unicast(
                     &mut self.hard_iface,
                     &mut self.orig_table,
-                    &mut frame,
+                    frame,
                 ) {
                     Ok(payload) => payload,
                     Err(e) => {
@@ -240,29 +253,93 @@ impl<D:LinkDriver> MeshCtx<D> {
 
 
             }
-            Some(_)=>{
+            Some(t)=>{
                 self.hard_iface.record_rx_dropped();
-                return Err(DropReason::NoRoute);
+                return Err(DropReason::UnknownType(t));
             }
 
         }
 
     }
 
+    pub fn send_frame<'f>(&mut self, frame: &'f[u8])->Result<(),TransmitionError>{
 
-}
-
-
-
-
-pub struct TranslationTable{
-    placeholder: u8,
-}
-
-impl TranslationTable {
-    pub const fn new()->Self{
-        Self{
-            placeholder:0,
+        if !self.mesh_active{
+            return Err(TransmitionError::MeshNotActive);
         }
+
+        if frame.len() < ETH_HLEN{
+            return Err(TransmitionError::TooShort);
+        }
+        
+
+
+        let eth_header = match EthHeader::parse(frame){
+            Ok(header)=>header,
+            Err(e)=>{
+                return Err(TransmitionError::Packet(e));
+            }
+        };
+
+        if eth_header.eth_type() == ETH_P_8021Q{
+            return Err(TransmitionError::VlanTagged);
+        }
+        if eth_header.source() != self.orig_addr{
+            return Err(TransmitionError::InvalidSource);
+        }
+        if eth_header.dest() == Mac::STP || eth_header.dest() == Mac::ECTP{
+            return Err(TransmitionError::InvalidDestination);
+        }
+
+        if eth_header.dest().is_multicast() || eth_header.dest().is_broadcast(){
+            // Unicast frame is a bit larger so we use it instead of unicast
+            if frame.len()>BCAST_INNER_FRAME_LEN{
+                return Err(TransmitionError::TooLong);
+            }
+            match broadcast::send_broadcast(&mut self.hard_iface, &mut self.bcast_seqno, frame){
+                Ok(())=>return Ok(()),
+                Err(e)=>{
+                    return Err(e)
+                },
+            };
+        }
+        // Unicast frame is a bit larger so we use it instead of unicast
+        if frame.len()>UNICAST_INNER_FRAME_LEN{
+            return Err(TransmitionError::TooLong);
+        }
+        match unicast::send_unicast(&mut self.hard_iface, &mut self.orig_table, frame){
+            Ok(())=>return Ok(()),
+            Err(e)=>{
+                return Err(e)
+            },
+        };
+
+    }   
+
+
+
+    pub fn poll(&mut self,now:Instant, rand:u32)->Instant{
+        if !self.mesh_active{
+            return now+ORIG_INTER;
+        }
+
+        if time::has_reached(now, self.next_ogm){
+            self.next_ogm = send_own_ogm(
+                &mut self.hard_iface, 
+                &mut self.orig_table, 
+                now, 
+                rand
+            );
+        }
+
+        if time::has_reached(now, self.next_purge){
+            self.orig_table.purge(now);
+            self.next_purge = now + PURGE_PERIOD;
+        }
+
+        return time::earliest(
+            Some(self.next_ogm),
+            Some(self.next_purge)).unwrap_or(self.next_ogm);
+
     }
 }

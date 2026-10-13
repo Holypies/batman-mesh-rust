@@ -110,7 +110,7 @@ pub fn classify_unicast(my_mac: Mac, payload: &[u8]) -> UnicastType {
 pub fn send_unicast<D:LinkDriver>(
     hardif: &mut HardInterface<D>,
     orig_table: &OriginatorTable,
-    buffer: &mut FrameBuffer<MAX_BATMAN_FRAME_SIZE, UNICAST_HEADROOM>,
+   // buffer: &mut FrameBuffer<MAX_BATMAN_FRAME_SIZE, UNICAST_HEADROOM>,
     eth_frame: &[u8],
 )->Result<(),TransmitionError>{
     if !hardif.is_up(){
@@ -141,7 +141,7 @@ pub fn send_unicast<D:LinkDriver>(
     } 
 
     let unicast_header: BatmanAdvUnicastPacket = BatmanAdvUnicastPacket::new(dest);
-     
+    let buffer = &mut FrameBuffer::<MAX_BATMAN_FRAME_SIZE, UNICAST_HEADROOM>::new();
     match build_unicast_frame(unicast_header, next_hop, my_mac, eth_frame, buffer){
         Ok(())=>{
             match hardif.transmit(buffer.bytes()){

@@ -8,7 +8,7 @@ use crate::originatortable::OriginatorTable;
 use crate::mac::Mac;
 use crate::packets::{BatmanAdvBroadcastPacket, Packet, ETH_P_BATMAN};
 use crate::time::Instant;
-use crate::consts::{ETH_HLEN, BCAST_FRAME_LEN, BCAST_HEADROOM, MIN_ETH_FRAME_SIZE};
+use crate::consts::{ETH_HLEN, MAX_BATMAN_FRAME_SIZE, BCAST_HEADROOM, MIN_ETH_FRAME_SIZE};
 use crate::eth::EthHeader;
 
 
@@ -20,10 +20,6 @@ pub enum BroadcastType{
         bcast: BatmanAdvBroadcastPacket, 
     }
 
-}
-pub enum SendBcastError{
-    TooLong,
-    
 }
 
 
@@ -105,7 +101,7 @@ pub fn classify_bcast(my_mac: Mac, payload: &[u8]) -> BroadcastType {
 pub fn send_broadcast<D:LinkDriver>(
     hardif: &mut HardInterface<D>, 
     bcast_seqno: &mut u32, 
-    buffer: &mut FrameBuffer<BCAST_FRAME_LEN, BCAST_HEADROOM>,
+   // buffer: &mut FrameBuffer<MAX_BATMAN_FRAME_SIZE, BCAST_HEADROOM>,
     eth_frame: &[u8],
 )->Result<(), TransmitionError>{
     if !hardif.is_up(){
@@ -121,8 +117,9 @@ pub fn send_broadcast<D:LinkDriver>(
     *bcast_seqno = bcast_seqno.wrapping_add(1);
 
     let bcast_header: BatmanAdvBroadcastPacket = BatmanAdvBroadcastPacket::new(my_mac, seqno);
-    
-    match build_bcast_frame(bcast_header, my_mac, eth_frame ,buffer) {
+    let buffer = &mut FrameBuffer::<MAX_BATMAN_FRAME_SIZE, BCAST_HEADROOM>::new();
+
+    match build_bcast_frame(bcast_header, my_mac, eth_frame, buffer) {
         Ok(())=>{
             match hardif.transmit(buffer.bytes()){
                 Ok(()) => Ok(()),
@@ -138,7 +135,7 @@ pub fn build_bcast_frame(
     bcast_header:BatmanAdvBroadcastPacket,
     source_mac: Mac, 
     eth_frame: &[u8],
-    buffer: &mut FrameBuffer<BCAST_FRAME_LEN, BCAST_HEADROOM>,
+    buffer: &mut FrameBuffer<MAX_BATMAN_FRAME_SIZE, BCAST_HEADROOM>,
 )->Result<(), TransmitionError>{
     buffer.reset_cursors();
 
@@ -166,4 +163,31 @@ pub fn pad_to_min_frame<const N: usize, const H: usize>(
     let missing = MIN_ETH_FRAME_SIZE.saturating_sub(buffer.len());
     buffer.append(missing)?.fill(0);
     Ok(())
+}
+
+
+#[cfg(test)]
+mod test{
+    
+
+    #[test]
+    fn pad_to_min_frame_test(){
+
+    }
+    
+    #[test]
+    fn build_bcast_frame_test(){
+
+    }
+
+    #[test]
+    fn classify_bcast_test(){
+
+    }
+
+    #[test]
+    fn process_bcast_test(){
+
+    }
+
 }
