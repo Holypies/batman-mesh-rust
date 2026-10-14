@@ -1,15 +1,15 @@
-use crate::consts::{ETH_HLEN, HEADROOM};
-use crate::Mac::Mac;
+use crate::consts::{MAX_BATMAN_FRAME_SIZE, UNICAST_HEADROOM, BCAST_HEADROOM, OGM_HEADROOM, MIN_ETH_FRAME_SIZE};
 
 // frame consts
-pub const MESH_HEADROOM: usize = ETH_HLEN+WIRE_LEN;
-pub const MAX_LINK_PAYLOAD:usize = 1504;
-pub const MESH_FRAME_CAP:usize = MESH_HEADROOM+ETH_HLEN+MAX_LINK_PAYLOAD;
+//pub const MESH_HEADROOM: usize = ETH_HLEN+WIRE_LEN;
+//pub const MAX_LINK_PAYLOAD:usize = 1504;
+//pub const MESH_FRAME_CAP:usize = MESH_HEADROOM+ETH_HLEN+MAX_LINK_PAYLOAD;
 
 // frame types
 // TODO: add correct payload for MeshFrame
-pub type MeshFrame = FrameBuffer<1552,34>;
-pub type OgmFrame = FrameBuffer<256,14>;
+pub type UnicastFrame = FrameBuffer<MAX_BATMAN_FRAME_SIZE, UNICAST_HEADROOM>;
+pub type BroadcastFrame = FrameBuffer<MAX_BATMAN_FRAME_SIZE, BCAST_HEADROOM>;
+pub type OgmFrame = FrameBuffer<MIN_ETH_FRAME_SIZE,OGM_HEADROOM>;
 
 
 
@@ -19,6 +19,7 @@ pub enum FrameError{
     NoTailRoom{need:usize, got:usize},
     TooShort{need: usize, got:usize},
     NoCapacity{need:usize, cap:usize},
+    TooLarge,
 }
 
 pub struct FrameBuffer<const N:usize, const HEADROOM:usize>{
@@ -130,11 +131,11 @@ impl<const N:usize,const HEADROOM:usize> FrameBuffer<N, HEADROOM>{
         &mut self.data[HEADROOM..N]
     }
 
-    pub fn commit(&self, com:&[u8]){
+    pub fn commit(&self, com:&[u8])->Result<(), FrameError>{
         if self.start == HEADROOM && self.end == HEADROOM{
             let cap: usize = N - HEADROOM;
-            if com>cap{
-                return Err(FrameBuffer::NoCapacity{need:com, cap},);
+            if com.len()>cap{
+                return Err(FrameError::NoCapacity{need:com.len(), cap:cap as usize});
             }
 
         }
@@ -150,7 +151,7 @@ mod tests {
 
     #[test]
     fn frame_buffer_constructor_test(){
-        let buf: FrameBuffer<8, 4> = FrameBuffer::new();
+        let _buf: FrameBuffer<8, 4> = FrameBuffer::new();
 
 
     }

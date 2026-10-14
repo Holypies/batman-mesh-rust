@@ -10,12 +10,18 @@ impl Mac {
     pub const ZERO: Mac = Mac([0x00; 6]);
 
     /// Spanning tree protocol address. batman-adv refuses to carry frames
-    /// sent to it, see `batadv_interface_tx`
+    /// sent to it
     pub const STP: Mac = Mac([0x01, 0x80, 0xC2, 0x00, 0x00, 0x00]);
 
     /// Ethernet Configuration Testing Protocol address, refused for the
     /// same reason as `STP`
     pub const ECTP: Mac = Mac([0xCF, 0x00, 0x00, 0x00, 0x00, 0x00]);
+
+    
+    /// Low bit of the first octet: set for multicast and broadcast.
+    pub const GROUP_BIT: u8 = 0x01;
+    /// Second bit of the first octet: set for locally administered addresses.
+    pub const LOCAL_BIT: u8 = 0x02;
 
     /// Builds an address from six octets in wire order
     pub const fn from_octets(octets: [u8; 6]) -> Self {
@@ -32,7 +38,7 @@ impl Mac {
             bytes[5],
         ])
     }
-
+ /* 
     pub const fn derive_local(&self) -> Self {
         let o = &self.0;
         Mac([
@@ -45,7 +51,7 @@ impl Mac {
         ])
     }
 
-
+*/
     /// Copies an address out of the front of `buf`.
     pub fn from_slice(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::LEN {
@@ -106,12 +112,12 @@ impl Mac {
     pub const fn is_valid(&self) -> bool {
         !self.is_multicast() && !self.is_zero()
     }
-
+/* 
     pub const fn is_locally_administered(&self) -> bool {
         self.0[0] & Self::LOCAL_BIT != 0
     }
 
-
+*/
 }
 
 impl fmt::Display for Mac {
@@ -133,6 +139,6 @@ impl fmt::Debug for Mac {
 
 #[cfg(test)]
 mod tests {
-    use super::Mac;
+   // use super::Mac;
   
 }

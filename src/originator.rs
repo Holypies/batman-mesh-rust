@@ -3,7 +3,6 @@ use crate::bitwindow::WindowCheck::Protected;
 use crate::bitwindow::{BitWindow, BitWindowResult, WindowCheck, signed_diff, window_protection};
 use crate::consts::{MAX_NEIGHBORS, TQ_RING_SIZE, WINDOW_SIZE, ORIG_TIME_OUT};
 use crate::mac::Mac;
-use crate::meshctx::DropReason;
 use crate::time::Instant;
 
 
@@ -168,14 +167,6 @@ impl Originator {
 
         let mut status: BitWindowResult = BitWindowResult::New;
         let mut window_moved: bool = false;
-
-        let  :bool = match self.find_neighbor_mut(sender){
-            Some(neighbor)=> true,
-            None => false,
-
-        }
-
-
 
         for neighbor in self.neighbors.iter_mut() {
 

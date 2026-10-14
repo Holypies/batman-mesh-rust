@@ -1,5 +1,16 @@
 #![cfg_attr(not(test), no_std)]
 
+
+pub enum MeshError {
+    Frame(FrameError),
+    Packet(PacketError),
+    //Interface(InterfaceError)
+
+}
+
+
+
+
 // Crate-internal helpers
 mod arrayvec;
 mod bytes;
@@ -14,7 +25,11 @@ pub mod originator;
 pub mod packets;
 pub mod consts;
 pub mod time;
-pub mod seqno;
+pub mod bitwindow;
+pub mod originatortable;
+pub mod ogm;
+pub mod broadcast;
+pub mod unicast;
 
 pub use framebuffer::{FrameBuffer, FrameError};
 pub use hardif::{HardInterface, InterfaceError, LinkDriver};

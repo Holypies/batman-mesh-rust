@@ -45,18 +45,19 @@ impl OriginatorTable{
         if self.list.is_full(){
             return Err(OriginatorTableError::TableFull);
         }
-        let new_mac = orig.mac();
-        for slot in &self.list[..self.list.len()]{
-            if let Some(item) = slot {
-                if item.mac == new_mac{
-                    return Err(OriginatorTableError::AlreadyInTable);
-                }
-            }
+       
+        if self.find_mac(orig.mac()).is_some() {
+            return Err(OriginatorTableError::AlreadyInTable);
         }
+
         orig.touch(now);
-        self.list.push(orig);
-        Ok(())
+        match self.list.push(orig) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(OriginatorTableError::TableFull),
+        }
+
     }
+    
     // TODO: fix remove
     pub fn remove_mac(&mut self, mac: Mac) -> Option<Originator> {
         let i: usize = self.list.iter().position(|o| o.mac() == mac)?;
@@ -98,10 +99,6 @@ impl OriginatorTable{
         if candidate_path.tq_avg() < router_path.tq_avg() {
             return false;
         }
- 
-        // Equal quality: prefer the link that echoes more of our OGMs.
-        // The router keeps ties so equal neighbors don't take turns.
-        
 
         self.echo_sum(candidate_mac) > self.echo_sum(router_mac)
 

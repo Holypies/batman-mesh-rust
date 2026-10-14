@@ -1,5 +1,6 @@
 use crate::mac::Mac;
 use crate::bytes::*;
+use crate::consts::{TQ_MAX};
 
 /// EtherType that carries batman-adv frames on the link
 pub const ETH_P_BATMAN: u16 = 0x4305;
@@ -20,7 +21,7 @@ const OFF_TYPE: usize = 0;
 const OFF_VERSION: usize = 1;
 
 /// max value of tq
-const BATADV_TQ_MAX_VALUE:u32 = 255;
+const BATADV_TQ_MAX_VALUE:u8 = 255;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketError {
@@ -73,8 +74,8 @@ fn check_header(buf: &[u8], want: usize, packet_type: u8) -> Result<(), PacketEr
     need(buf.len(), want)?;
     if buf[OFF_TYPE] != packet_type {
         return Err(PacketError::WrongType {
-            expected: packet_type,
-            got: buf[OFF_TYPE],
+            expected: packet_type as u16,
+            got: buf[OFF_TYPE] as u16,
         });
     }
     if buf[OFF_VERSION] != BATADV_COMPAT_VERSION {
@@ -265,7 +266,7 @@ impl Packet for BatmanAdvUnicastPacket {
 pub const BATADV_NOT_BEST_NEXT_HOP:u8 = 0x01;
 pub const BATADV_PRIMARIES_FIRST_HOP: u8 = 0x02;
 pub const BATADV_DIRECTLINK:u8 = 0x04;
-pub const BATADV_TQ_MAX_VALUE: u8 = 255;
+//pub const BATADV_TQ_MAX_VALUE: u8 = 255;
 
 
 mod ogm_off {
@@ -374,7 +375,11 @@ impl BatmanAdvOGMPacket {
     }
 
     pub fn apply_hop_penalty(&mut self, penalty:u8){
-        self.tq = ((self.tq as u32)*((BATADV_TQ_MAX_VALUE-(penalty as u32)) as u32)/BATADV_TQ_MAX_VALUE) as u8;
+        let dif_pen = (TQ_MAX-penalty) as u32;
+        let dif = dif_pen/TQ_MAX as u32;
+        let dif_tq =self.tq as u32 *dif; 
+
+        self.tq = dif_tq as u8;
     }
 
     pub fn set_prev_sender(&mut self, sender:Mac){
@@ -426,6 +431,6 @@ impl Packet for BatmanAdvOGMPacket {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  //  use super::*;
 
 }

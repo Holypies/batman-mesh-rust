@@ -1,3 +1,6 @@
+
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Structure a array vector with N spots of memory
 pub struct ArrayVec<T, const N:usize>{

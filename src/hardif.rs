@@ -1,5 +1,5 @@
 use crate::mac::Mac;
-use crate::eth::ETH_HLEN;
+use crate::consts::ETH_HLEN;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InterfaceError{

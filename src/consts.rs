@@ -1,9 +1,9 @@
-use crate::time::{Duration, micros, millis, secs};
+use crate::time::{Duration, millis, secs};
 
 // window size
 pub const WINDOW_SIZE:usize = 64;
 pub const TQ_RING_SIZE:usize = 5;
-pub const TQ_MAX:usize = 255;
+pub const TQ_MAX:u8 = 255;
 pub const SEQ_NO_RANGE:usize = 65536;
 
 // timer consts
@@ -52,4 +52,7 @@ pub const UNICAST_INNER_FRAME_LEN:usize = 1490;
 pub const BCAST_INNER_OFFSET:usize = 28;
 pub const BCAST_HEADROOM:usize=28;
 pub const BCAST_INNER_FRAME_LEN:usize = 1486;
-//  
+
+// OGM frame consts
+pub const OGM_HEADROOM:usize =14;
+pub const OGM_FRAME_LEN:usize =60;  

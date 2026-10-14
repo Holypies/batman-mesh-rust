@@ -1,15 +1,15 @@
 use crate::eth::EthHeader;
 use crate::framebuffer::FrameBuffer;
-use crate::originator::{Neighbor,Originator};
+use crate::originator::{Neighbor,Originator, OriginatorError::{ZeroTq, UnknownNeighbor}};
 use crate::originatortable::OriginatorTable;
-use crate::originatortable::OriginatorTableError::{NeighborListFull, NotBestNextHop, UnknownNeighbor, ZeroTq};
+use crate::originatortable::OriginatorTableError::NotBestNextHop;
 use crate::packets::{BATADV_DIRECTLINK, BatmanAdvOGMPacket, ETH_P_BATMAN, Packet, PacketError};
 use crate::mac::Mac;
 use crate::time::{Instant, ogm_send_time};
-use crate::{FrameError, HardInterface, consts::*};
+use crate::{FrameError, HardInterface, MeshError, consts::*};
 use crate::hardif::LinkDriver;
-use crate::meshctx::{DropReason, MeshError};
-use crate::bitwindow::BitWindowResult::{self, Protected};
+use crate::meshctx::DropReason;
+use crate::bitwindow::BitWindowResult::self;
 use crate::consts::HOP_PENALTY;
 use crate::packets::BATADV_PRIMARIES_FIRST_HOP;
 use crate::packets::BATADV_NOT_BEST_NEXT_HOP;
@@ -260,7 +260,7 @@ pub fn process_ogm<D: LinkDriver>(
 
 
 fn calc_tq(tq_in: u8, echo_count: u8, receive_count: u8) -> u8 {
-    const MAX: u32 = BATADV_TQ_MAX_VALUE as u32; // 100 %
+    const MAX: u32 = TQ_MAX as u32; // 100 %
     const WINDOW: u32 = WINDOW_SIZE as u32;
  
     let receive_count = (receive_count as u32).min(WINDOW);

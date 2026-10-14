@@ -1,7 +1,8 @@
 use crate::mac::Mac;
 use crate::packets::PacketError;
 use crate::bytes::*;
-use crate::consts::{ETH_HLEN,ETH_VLAN_HLEN, ETH_P_8021Q,VLAN_VID_MASK};
+use crate::consts::{ETH_HLEN};
+    //ETH_VLAN_HLEN, ETH_P_8021Q,VLAN_VID_MASK}; used in EthInfo which is not implemented
 
 
 pub const BATADV_VLAN_HAS_TAG:u16 = 1 << 15;
@@ -16,11 +17,11 @@ mod offset{
     pub const ETH_DEST: usize = 0;
     pub const ETH_SOURCE: usize = 6;
     pub const ETH_TYPE: usize = 12;
-    pub const VLAN_TCI: usize = 14;
-    pub const VLAN_ETH_TYPE: usize = 16;
+  //  pub const VLAN_TCI: usize = 14;       used in EthInfo which is not implemented
+  //  pub const VLAN_ETH_TYPE: usize = 16;
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/* 
+#[derive(Debug, Clone, Copy)]
 pub struct EthInfo{
     header: EthHeader,
     inner_type: u16,
@@ -46,7 +47,7 @@ impl EthInfo{
     }
 
 
-}
+}*/
 
 
 #[derive(Debug, Copy, Clone)]
@@ -132,7 +133,7 @@ impl EthHeader{
         write_u16(buf, offset::ETH_TYPE, self.eth_type);
         Ok(())
     }
-
+/* 
     /// Reads front of client frame looking one level past an 802.1Q
     /// tag when there is one. ONLY USE ON INNER HEADERS
     /// 
@@ -140,6 +141,7 @@ impl EthHeader{
     ///     buf: MAC buffer
     /// 
     /// Returns:
+    
     pub fn inspect(buf: &[u8])-> Result<EthInfo,PacketError>{
         if buf.len()<ETH_HLEN{
             return Err(PacketError::TooShort{need:ETH_HLEN, got: buf.len()});
@@ -167,16 +169,15 @@ impl EthHeader{
             hlen: ETH_VLAN_HLEN,
         })
 
-    }
+    }*/
 
 }
 
 #[cfg(test)]
 mod test{
-    use crate::FrameBuffer;
     use super::*;
 
-    const buf:&[u8] =&[0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF]; 
+    //const _buf:&[u8] =&[0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF]; 
 
     const DEST: Mac = Mac::from_octets([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
     const SOURCE: Mac = Mac::from_octets([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
@@ -215,11 +216,6 @@ mod test{
     // TODO: implement tests
     #[test]
     fn parse_test(){
-
-        let header = match EthHeader::parse(buf){
-
-        }
-
 
         
     }
