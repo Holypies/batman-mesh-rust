@@ -50,7 +50,7 @@ impl EthInfo{
 }*/
 
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct EthHeader{
     dest: Mac,
     source: Mac,
@@ -216,18 +216,51 @@ mod test{
     // TODO: implement tests
     #[test]
     fn parse_test(){
-
-        
+        let buf = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, // dest
+            0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, // source
+            0x86, 0xDD,                         // eth_type
+            0x99, 0x99,                         // payload
+        ];
+    
+        let eth_header = EthHeader::parse(&buf).unwrap();
+    
+        assert_eq!(eth_header.dest, Mac::read_at(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66], 0));
+        assert_eq!(eth_header.source, Mac::read_at(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF], 0));
+    
+        assert_eq!(eth_header.eth_type, 0x86DD);
+    
+        assert!(matches!(
+            EthHeader::parse(&buf[..13]),
+            Err(PacketError::TooShort { need: 14, got: 13 })
+        ));
     }
-
+    
     #[test]
-    fn write_test(){
-
-    }
-
-    #[test]
-    fn inspect_test(){
-
+    fn write_test() {
+        let eth_header = EthHeader {
+            dest: Mac::read_at(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66], 0),
+            source: Mac::read_at(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF], 0),
+            eth_type: 0x86DD,
+        };
+    
+        let mut buf = [0x99u8; 16];
+        eth_header.write(&mut buf).unwrap();
+        assert_eq!(
+            buf,
+            [
+                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, // dest
+                0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, // source
+                0x86, 0xDD,                         // eth_type
+                0x99, 0x99,                         // payload untouched
+            ]
+        );
+    
+        let mut short = [0x77u8; 13];
+        assert!(matches!(
+            eth_header.write(&mut short),
+            Err(PacketError::TooShort { need: 14, got: 13 })
+        ));
     }
     
 }
