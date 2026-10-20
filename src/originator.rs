@@ -110,7 +110,7 @@ impl Originator {
     // --- functions ---
     // TODO: fix .unwrap(); to match for panic free code
     pub fn add_neighbor(&mut self, mut neigh:Neighbor, now:Instant)->Result<(),OriginatorError>{
-         if self.neighbors.is_full(){
+        if self.neighbors.is_full(){
             return Err(OriginatorError::NeighborListFull);
         }
         let new_mac = neigh.addr();
@@ -425,3 +425,744 @@ impl TqRing {
 }
 
 
+mod tests{
+    use crate::time::micros;
+
+    use super::*;
+
+    const STP_MAC:Mac = Mac::STP;
+    const BROADCAST_MAC: Mac = Mac::BROADCAST;
+    const ZERO_MAC: Mac = Mac::ZERO;
+    const NOW:Instant = Instant::from_ticks(0);
+    const THEN:Instant = Instant::from_ticks(100);
+
+    // neighbor with tq avg forced, bypasses TqRing logic
+    fn neigh_tq(addr: Mac, avg: u8) -> Neighbor {
+        let mut n = Neighbor::new(addr, NOW);
+        n.tq.avg = avg;
+        n
+    }
+
+    // originator with neighbors pushed directly, bypasses add_neighbor
+    fn orig_with(neighs: &[Neighbor]) -> Originator {
+        let mut orig = Originator::new(STP_MAC, NOW);
+        for n in neighs {
+            orig.neighbors.push(*n).unwrap();
+        }
+        orig
+    }
+
+    fn full_ring(addr: Mac) -> Neighbor {
+        let mut neigh = Neighbor::new(addr, NOW);
+        neigh.tq.values = [100; TQ_RING_SIZE];
+        neigh.tq.avg = 100;
+        neigh
+    }
+    
+
+    fn mac(n: u8) -> Mac {
+        Mac::from_octets([0x02, 0x00, 0x00, 0x00, 0x00, n])
+    }
+
+    // --- Originator tests ---
+    #[test]
+    fn add_neighbor_test(){
+        let mut orig = Originator::new(STP_MAC, NOW);
+
+        // new neighbor: Ok, stored once
+        assert_eq!(orig.add_neighbor(Neighbor::new(BROADCAST_MAC, NOW), NOW), Ok(()));
+        assert_eq!(orig.neighbors.len(), 1);
+        assert_eq!(orig.neighbors.get(0).unwrap().addr, BROADCAST_MAC);
+
+        // same addr again: Ok, no duplicate entry
+        assert_eq!(orig.add_neighbor(Neighbor::new(BROADCAST_MAC, THEN), NOW), Ok(()));
+        assert_eq!(orig.neighbors.len(), 1);
+        assert_eq!(orig.neighbors.get(0).unwrap().last_seen, THEN);
+
+        // second distinct addr: appended
+        let mac2 = Mac::from_octets([0x11;6]);
+        assert_eq!(orig.add_neighbor(Neighbor::new(mac2, NOW), NOW), Ok(()));
+        assert_eq!(orig.neighbors.len(), 2);
+        assert_eq!(orig.neighbors.get(1).unwrap().addr, mac2);
+
+        // fill to capacity
+        let mut full = Originator::new(STP_MAC, NOW);
+        for i in 0..MAX_NEIGHBORS {
+            assert_eq!(full.add_neighbor(Neighbor::new(mac(i as u8 + 1), NOW), NOW), Ok(()));
+        }
+        assert_eq!(full.neighbors.len(), MAX_NEIGHBORS);
+
+        // one more distinct: NeighborListFull, list unchanged
+        let extra = mac(MAX_NEIGHBORS as u8 + 1);
+        assert_eq!(
+            full.add_neighbor(Neighbor::new(extra, NOW), NOW),
+            Err(OriginatorError::NeighborListFull)
+        );
+        assert_eq!(full.neighbors.len(), MAX_NEIGHBORS);
+        assert!(full.find_neighbor(extra).is_none());
+
+    }
+
+    #[test]
+    fn touch_test(){
+        let mut orig = orig_with(&[Neighbor::new(mac(1), NOW)]);
+        let t = Instant::from_ticks(5_000);
+
+        orig.touch(t);
+        assert_eq!(orig.last_seen, t);
+
+        // neighbors untouched
+        assert_eq!(orig.neighbors.get(0).unwrap().last_seen, NOW);
+    }
+
+    #[test]
+    fn find_neighbor_test(){
+        // empty
+        let empty = Originator::new(STP_MAC, NOW);
+        assert!(empty.find_neighbor(mac(1)).is_none());
+
+        
+        let mut first = Neighbor::new(mac(2), NOW);
+        let mut second = Neighbor::new(mac(3), NOW);
+        let orig = orig_with(&[Neighbor::new(mac(1), NOW), first, second]);
+
+        assert_eq!(orig.find_neighbor(mac(1)).unwrap().addr, mac(1));
+        assert_eq!(orig.find_neighbor(mac(2)).unwrap(), first);
+        assert_eq!(orig.find_neighbor(mac(3)).unwrap(), second);
+
+        // unknown addr
+        assert!(orig.find_neighbor(ZERO_MAC).is_none());
+
+        // originator's own mac is not a neighbor
+        let mut stp =Neighbor::new(Mac::STP, NOW);
+        orig.add_neighbor(stp, NOW);
+        assert!(orig.find_neighbor(STP_MAC).is_none());
+
+    }
+
+    #[test]
+    fn find_neighbor_mut_test(){
+       // empty
+        let empty = Originator::new(STP_MAC, NOW);
+        assert!(empty.find_neighbor_mut(mac(1)).is_none());
+
+        
+        let mut first = Neighbor::new(mac(2), NOW);
+        let mut second = Neighbor::new(mac(3), NOW);
+        let orig = orig_with(&[Neighbor::new(mac(1), NOW), first, second]);
+
+        let one = orig.find_neighbor_mut(mac(1)).unwrap();
+        let two = orig.find_neighbor_mut(mac(2)).unwrap();
+        let three = orig.find_neighbor_mut(mac(3)).unwrap();
+        
+        assert_eq!(one.addr, mac(1));
+        assert_eq!(two, first);
+        assert_eq!(three, second);
+
+        // can be mutated
+        one.touch(THEN);
+        two.touch(THEN);
+        three.touch(THEN);
+
+        assert_eq!(one.last_seen, THEN);
+        assert_eq!(two.last_seen, THEN);
+        assert_eq!(three.last_seen, THEN);
+
+        // unknown addr
+        assert!(orig.find_neighbor_mut(ZERO_MAC).is_none());
+
+        // originator's own mac is not a neighbor
+        let mut stp =Neighbor::new(Mac::STP, NOW);
+        orig.add_neighbor(stp, NOW);
+        assert!(orig.find_neighbor_mut(STP_MAC).is_none());
+
+    }
+
+    #[test]
+    fn slide_echo_window_test() {
+        let mut orig = Originator::new(STP_MAC, NOW);
+        assert_eq!(orig.echo(), 0);
+
+        // slide shifts existing bit, does not drop it
+        orig.record_echo(0);
+        orig.slide_echo_window();
+        assert_eq!(orig.echo(), 1);
+
+        // slot 0 freed by slide: can mark again
+        orig.record_echo(0);
+        assert_eq!(orig.echo(), 2);
+
+        // slide never marks
+        orig.slide_echo_window();
+        assert_eq!(orig.echo(), 2);
+
+        // full window of slides clears everything
+        for _ in 0..WINDOW_SIZE {
+            orig.slide_echo_window();
+        }
+        assert_eq!(orig.echo(), 0);
+
+        // other windows / seqno untouched
+        assert_eq!(orig.bcast_bits.count(), 0);
+        assert_eq!(orig.last_seqno, 0);
+    }
+
+    #[test]
+    fn record_echo_test(){
+        let mut orig = Originator::new(STP_MAC, NOW);
+        assert_eq!(orig.echo(), 0);
+
+        orig.record_echo(0);
+        assert_eq!(orig.echo(), 1);
+
+        // same offset twice: idempotent
+        orig.record_echo(0);
+        assert_eq!(orig.echo(), 1);
+
+        orig.record_echo(3);
+        assert_eq!(orig.echo(), 2);
+
+        // last slot in window
+        orig.record_echo(WINDOW_SIZE as i32 - 1);
+        assert_eq!(orig.echo(), 3);
+
+        // bcast window untouched
+        assert_eq!(orig.bcast_bits.count(), 0);
+    }
+
+    #[test]
+    fn update_seqno_test(){
+        let a = mac(1);
+        let b = mac(2);
+        let mut orig = orig_with(&[Neighbor::new(a, NOW), Neighbor::new(b, NOW)]);
+
+        // newer seqno via A: New, window moves, seqno + ttl stored
+        assert_eq!(orig.update_seqno(1, a, 50, NOW), BitWindowResult::New);
+        assert_eq!(orig.last_seqno, 1);
+        assert_eq!(orig.last_ttl, 50);
+        assert_eq!(orig.find_neighbor(a).unwrap().real_bits_count(), 1);
+        assert_eq!(orig.find_neighbor(b).unwrap().real_bits_count(), 0);
+
+        // same seqno again via A: NeighDup, nothing stored
+        assert_eq!(orig.update_seqno(1, a, 40, NOW), BitWindowResult::NeighDup);
+        assert_eq!(orig.last_seqno, 1);
+        assert_eq!(orig.last_ttl, 50);
+
+        // same seqno via B, first time from B: OrigDup, B now marked
+        assert_eq!(orig.update_seqno(1, b, 40, NOW), BitWindowResult::OrigDup);
+        assert_eq!(orig.find_neighbor(b).unwrap().real_bits_count(), 1);
+        assert_eq!(orig.last_ttl, 50);
+
+        // sender first in list + other dup: NeighDup not downgraded
+        assert_eq!(orig.update_seqno(1, a, 40, NOW), BitWindowResult::NeighDup);
+
+        // sender second in list + earlier OrigDup: NeighDup overrides
+        assert_eq!(orig.update_seqno(1, b, 40, NOW), BitWindowResult::NeighDup);
+
+        // jump ahead: New, all windows slide, only sender marked
+        assert_eq!(orig.update_seqno(3, a, 30, NOW), BitWindowResult::New);
+        assert_eq!(orig.last_seqno, 3);
+        assert_eq!(orig.last_ttl, 30);
+        assert_eq!(orig.find_neighbor(a).unwrap().real_bits_count(), 2);
+        assert_eq!(orig.find_neighbor(b).unwrap().real_bits_count(), 1);
+
+        // older unseen seqno inside window: New, seqno + ttl unchanged
+        assert_eq!(orig.update_seqno(2, b, 20, NOW), BitWindowResult::New);
+        assert_eq!(orig.last_seqno, 3);
+        assert_eq!(orig.last_ttl, 30);
+        assert_eq!(orig.find_neighbor(b).unwrap().real_bits_count(), 2);
+
+        // that older seqno now dup: via B NeighDup, via A OrigDup
+        assert_eq!(orig.update_seqno(2, b, 20, NOW), BitWindowResult::NeighDup);
+        assert_eq!(orig.update_seqno(2, a, 20, NOW), BitWindowResult::OrigDup);
+    }
+    
+    #[test]
+    fn check_bcast_test(){
+        let mut orig = Originator::new(STP_MAC, NOW);
+
+        // seqno 0 on fresh window: accepted, then dup
+        assert_eq!(orig.check_bcast(0, NOW), true);
+        assert_eq!(orig.check_bcast(0, NOW), false);
+        assert_eq!(orig.last_bcast_seqno, 0);
+
+        // newer: accepted, window moves
+        assert_eq!(orig.check_bcast(1, NOW), true);
+        assert_eq!(orig.last_bcast_seqno, 1);
+        assert_eq!(orig.check_bcast(1, NOW), false);
+
+        // older already seen: rejected
+        assert_eq!(orig.check_bcast(0, NOW), false);
+
+        // jump ahead: accepted
+        assert_eq!(orig.check_bcast(5, NOW), true);
+        assert_eq!(orig.last_bcast_seqno, 5);
+
+        // older unseen inside window: accepted, last seqno unchanged
+        assert_eq!(orig.check_bcast(3, NOW), true);
+        assert_eq!(orig.last_bcast_seqno, 5);
+        assert_eq!(orig.check_bcast(3, NOW), false);
+
+        // ogm seqno state untouched
+        assert_eq!(orig.last_seqno, 0);
+        assert_eq!(orig.echo(), 0);
+    }
+
+    #[test]
+    fn router_neighbor_test(){
+        let mut orig = orig_with(&[Neighbor::new(mac(1), NOW), Neighbor::new(mac(2), NOW)]);
+
+        // no router set
+        assert!(orig.router_neighbor().is_none());
+
+        // router not in list
+        orig.router_id = Some(BROADCAST_MAC);
+        assert!(orig.router_neighbor().is_none());
+
+        // router in list
+        orig.router_id = Some(mac(2));
+        assert_eq!(orig.router_neighbor().unwrap().addr, mac(2));
+        assert_ne!(orig.router_neighbor().unwrap().addr, mac(1));
+
+        orig.router_id = Some(mac(1));
+        assert_eq!(orig.router_neighbor().unwrap().addr, mac(1));
+        assert_ne!(orig.router_neighbor().unwrap().addr, mac(2));
+
+        // router set, empty list
+        let mut empty = Originator::new(STP_MAC, NOW);
+        empty.router_id = Some(mac(1));
+        assert!(empty.router_neighbor().is_none());
+    }
+
+    #[test]
+    fn best_neighbor_test(){
+        // empty list
+        assert_eq!(Originator::new(STP_MAC, NOW).best_neighbor(), None);
+
+        // all tq 0
+        let orig = orig_with(
+            &[
+                neigh_tq(mac(1), 0), 
+                neigh_tq(mac(2), 0)
+            ]
+        );
+        assert_eq!(orig.best_neighbor(), None);
+
+        // highest in middle
+        let orig = orig_with(
+            &[
+                neigh_tq(mac(1), 50), 
+                neigh_tq(mac(2), 200), 
+                neigh_tq(mac(3), 100)
+            ]
+        );
+        assert_eq!(orig.best_neighbor(), Some(mac(2)));
+
+        // highest first
+        let orig = orig_with(
+            &[
+                neigh_tq(mac(1), 200),
+                neigh_tq(mac(2), 50)
+            ]
+        );
+        assert_eq!(orig.best_neighbor(), Some(mac(1)));
+
+        // highest last
+        let orig = orig_with(
+            &[
+                neigh_tq(mac(1), 10), 
+                neigh_tq(mac(2), 20)
+            ]
+        );
+        assert_eq!(orig.best_neighbor(), Some(mac(2)));
+
+        // tie: first wins
+        let orig = orig_with(
+            &[
+                neigh_tq(mac(1), 100), 
+                neigh_tq(mac(2), 100)
+            ]
+        );
+        assert_eq!(orig.best_neighbor(), Some(mac(1)));
+
+        // TODO: DOUBLE CHECK THAT IT NEEDS TO IGNORE current router
+        let mut orig = orig_with(
+            &[
+                neigh_tq(mac(1), 10), 
+                neigh_tq(mac(2), 20)
+            ]
+        );
+        orig.router_id = Some(mac(1));
+        assert_eq!(orig.best_neighbor(), Some(mac(2)));
+
+    }
+
+    #[test]
+    fn purge_timed_out_neighbors_test(){
+        let past = NOW + ORIG_TIME_OUT + micros(1);
+
+        // nothing timed out: false, all kept
+        let mut orig = orig_with(&[Neighbor::new(mac(1), past), Neighbor::new(mac(2), past)]);
+        orig.router_id = Some(mac(1));
+        assert_eq!(orig.purge_timed_out_neighbors(past), false);
+        assert_eq!(orig.neighbors.len(), 2);
+        assert_eq!(orig.router_id, Some(mac(1)));
+
+        // non-router timed out: removed, false, router kept
+        let mut orig = orig_with(&[Neighbor::new(mac(1), past), Neighbor::new(mac(2), NOW)]);
+        orig.router_id = Some(mac(1));
+        assert_eq!(orig.purge_timed_out_neighbors(past), false);
+        assert_eq!(orig.neighbors.len(), 1);
+        assert!(orig.find_neighbor(mac(2)).is_none());
+        assert_eq!(orig.router_id, Some(mac(1)));
+
+        // router timed out: removed, true, router -> best survivor
+        let mut stale_router = Neighbor::new(mac(1), NOW);
+        stale_router.tq.avg = 250;
+        let mut weak = Neighbor::new(mac(2), past);
+        weak.tq.avg = 50;
+        let mut strong = Neighbor::new(mac(3), past);
+        strong.tq.avg = 200;
+        let mut orig = orig_with(&[stale_router, weak, strong]);
+        orig.router_id = Some(mac(1));
+        assert_eq!(orig.purge_timed_out_neighbors(past), true);
+        assert_eq!(orig.neighbors.len(), 2);
+        assert!(orig.find_neighbor(mac(1)).is_none());
+        assert_eq!(orig.router_id, Some(mac(3)));
+
+        // router timed out, survivors all tq 0: router None
+        let mut orig = orig_with(&[Neighbor::new(mac(1), NOW), Neighbor::new(mac(2), past)]);
+        orig.router_id = Some(mac(1));
+        assert_eq!(orig.purge_timed_out_neighbors(past), true);
+        assert_eq!(orig.neighbors.len(), 1);
+        assert_eq!(orig.router_id, None);
+
+        // router timed out, list empty after: router None
+        let mut orig = orig_with(&[Neighbor::new(mac(1), NOW)]);
+        orig.router_id = Some(mac(1));
+        assert_eq!(orig.purge_timed_out_neighbors(past), true);
+        assert_eq!(orig.neighbors.len(), 0);
+        assert_eq!(orig.router_id, None);
+
+        // consecutive + trailing stale (swap_remove path): only fresh survive
+        let mut orig = orig_with(&[
+            Neighbor::new(mac(1), NOW),
+            Neighbor::new(mac(2), NOW),
+            Neighbor::new(mac(3), past),
+            Neighbor::new(mac(4), NOW),
+        ]);
+        assert_eq!(orig.purge_timed_out_neighbors(past), false);
+        assert_eq!(orig.neighbors.len(), 1);
+        assert!(orig.find_neighbor(mac(3)).is_some());
+    }
+
+    #[test]
+    fn has_timed_out_test(){
+        let mut orig = Originator::new(STP_MAC, NOW);
+        assert!(!orig.has_timed_out(NOW));
+
+        // exactly at boundary: not timed out (strict >)
+        let boundary = NOW + ORIG_TIME_OUT;
+        assert!(!orig.has_timed_out(boundary));
+
+        // just past boundary
+        let past = boundary + micros(1);
+        assert!(orig.has_timed_out(past));
+
+        // touch resets
+        orig.touch(past);
+        assert!(!orig.has_timed_out(past));
+
+        // neighbors' last_seen irrelevant
+        let mut orig = orig_with(&[Neighbor::new(mac(1), past)]);
+        orig.last_seen = NOW;
+        assert!(orig.has_timed_out(past));
+    }
+
+    #[test]
+    fn update_new_ogm_tq_test(){
+        assert!(TQ_RING_SIZE >= 2, "test assumes TQ_RING_SIZE >= 2");
+
+
+        let mut orig = orig_with(
+            &[
+                full_ring(mac(1)), 
+                full_ring(mac(2)), 
+                full_ring(mac(3))
+            ]
+        );
+
+        // sender's ring untouched, others get one 0 pushed
+        orig.update_new_ogm_tq(mac(1));
+        let a = orig.find_neighbor(mac(1)).unwrap();
+        assert_eq!(a.tq.values, [100u8; TQ_RING_SIZE]);
+        assert_eq!(a.tq.index, 0);
+
+        for &addr in [mac(2), mac(3)].iter() {
+            let n = orig.find_neighbor(addr).unwrap();
+            assert_eq!(n.tq.values[0], 0);
+            assert_eq!(n.tq.index, 1);
+            // zeros ignored by avg: unchanged while nonzero slots remain
+            assert_eq!(n.tq.avg, 100);
+        }
+
+        // repeat until rings all zero: avg 0, sender keeps 100
+        for _ in 1..TQ_RING_SIZE {
+            orig.update_new_ogm_tq(mac(1));
+        }
+        assert_eq!(orig.find_neighbor(mac(1)).unwrap().tq.avg, 100);
+        assert_eq!(orig.find_neighbor(mac(2)).unwrap().tq.avg, 0);
+        assert_eq!(orig.find_neighbor(mac(3)).unwrap().tq.avg, 0);
+
+        // unknown mac: every neighbor penalised
+        let mut orig = orig_with(&[full_ring(mac(1)), full_ring(mac(2))]);
+        orig.update_new_ogm_tq(ZERO_MAC);
+        assert_eq!(orig.find_neighbor(mac(1)).unwrap().tq.index, 1);
+        assert_eq!(orig.find_neighbor(mac(2)).unwrap().tq.index, 1);
+    }
+
+
+    // --- Neighbor tests ---
+    #[test]
+    fn tq_avg_test(){
+        let mut n = Neighbor::new(mac(1), NOW);
+        assert_eq!(n.tq_avg(), 0);
+
+        // reads ring's cached avg
+        n.tq.avg = 123;
+        assert_eq!(n.tq_avg(), 123);
+    }
+
+    #[test]
+    fn real_bits_count_test(){
+        let mut n = Neighbor::new(mac(1), NOW);
+        assert_eq!(n.real_bits_count(), 0);
+
+        n.real_bits.set(0);
+        assert_eq!(n.real_bits_count(), 1);
+
+        n.real_bits.set(5);
+        assert_eq!(n.real_bits_count(), 2);
+
+        assert_eq!(n.real_bits_count(), n.real_bits.count());
+    }
+
+    #[test]
+    fn touch_neighbor_test(){
+        let mut n = Neighbor::new(mac(1), NOW);
+        let t = Instant::from_ticks(5_000);
+
+        n.touch(t);
+        assert_eq!(n.last_seen, t);
+
+        // other fields untouched
+        assert_eq!(n.addr, mac(1));
+        assert_eq!(n.tq, TqRing::new());
+        assert_eq!(n.real_bits, BitWindow::new());
+        assert_eq!(n.last_ttl, 0);
+    }
+
+    #[test]
+    fn record_transmit_quality_test(){
+        assert!(TQ_RING_SIZE >= 2, "test assumes TQ_RING_SIZE >= 2");
+        let mut neigh = Neighbor::new(mac(1), NOW);
+
+        neigh.record_transmit_quality(100);
+        assert_eq!(neigh.tq.values[0], 100);
+        assert_eq!(neigh.tq_avg(), 100);
+
+        neigh.record_transmit_quality(50);
+        assert_eq!(neigh.tq.values[1], 50);
+        assert_eq!(neigh.tq_avg(), 75);
+
+        // zeros fill rest: stored but ignored by avg
+        for _ in 2..TQ_RING_SIZE {
+            neigh.record_transmit_quality(0);
+        }
+        assert_eq!(neigh.tq_avg(), 75);
+
+        // wrap: overwrites slot 0 (100 -> 0)
+        neigh.record_transmit_quality(0);
+        assert_eq!(neigh.tq.values[0], 0);
+        assert_eq!(neigh.tq_avg(), 50);
+
+        // overwrite slot 1: all zero
+        neigh.record_transmit_quality(0);
+        assert_eq!(neigh.tq_avg(), 0);
+    }
+
+    #[test]
+    fn slide_window_test() {
+        let mut neigh = Neighbor::new(mac(1), NOW);
+
+        // forward, marked: moved
+        assert_eq!(neigh.slide_window(1, true), true);
+        assert_eq!(neigh.real_bits_count(), 1);
+
+        // same seqno, already marked: not moved, no change
+        assert_eq!(neigh.slide_window(0, true), false);
+        assert_eq!(neigh.real_bits_count(), 1);
+
+        // forward, unmarked: moved, nothing new marked
+        assert_eq!(neigh.slide_window(1, false), true);
+        assert_eq!(neigh.real_bits_count(), 1);
+
+        // current slot now free: marks without moving
+        assert_eq!(neigh.slide_window(0, true), false);
+        assert_eq!(neigh.real_bits_count(), 2);
+
+        // older seqno inside window: marks without moving
+        assert_eq!(neigh.slide_window(-3, true), false);
+        assert_eq!(neigh.real_bits_count(), 3);
+
+        // jump >= WINDOW_SIZE: moved, window reset
+        assert_eq!(neigh.slide_window(WINDOW_SIZE as i32, true), true);
+        assert_eq!(neigh.real_bits_count(), 1);
+    }
+
+    #[test]
+    fn is_duplicate_test(){
+        let mut neigh = Neighbor::new(mac(1), NOW);
+
+        // empty window: nothing dup
+        assert!(!neigh.is_duplicate(0, 0));
+
+        // mark current (last = 10)
+        neigh.real_bits.set(0);
+        assert!(neigh.is_duplicate(10, 10));
+        // older, unmarked
+        assert!(!neigh.is_duplicate(10, 9));
+        // future
+        assert!(!neigh.is_duplicate(10, 11));
+
+        // older, marked
+        neigh.real_bits.set(2);
+        assert!(neigh.is_duplicate(10, 8));
+
+        // exactly WINDOW_SIZE behind: outside window (catches modulo bug, bit 0 is set)
+        assert!(!neigh.is_duplicate(10 + WINDOW_SIZE as u32, 10));
+
+        // seqno wraparound: last = 0, curr = u32::MAX is 1 behind
+        let mut wrapped = Neighbor::new(mac(2), NOW);
+        wrapped.real_bits.set(1);
+        assert!(wrapped.is_duplicate(0, u32::MAX));
+    }
+
+    #[test]
+    fn has_timed_out_nighbor_test(){
+        let mut neigh = Neighbor::new(mac(1), NOW);
+        assert!(!neigh.has_timed_out(NOW));
+
+        // exactly at boundary: not timed out (strict >)
+        let boundary = NOW + ORIG_TIME_OUT;
+        assert!(!neigh.has_timed_out(boundary));
+
+        // just past boundary
+        let past = boundary + micros(1);
+        assert!(neigh.has_timed_out(past));
+
+        // touch resets
+        neigh.touch(past);
+        assert!(!neigh.has_timed_out(past));
+    }
+
+
+    // --- Tq ring tests ---
+    #[test]
+    fn new_tq_ring_test(){
+        let ring = TqRing::new();
+        assert_eq!(ring.values, [0u8; TQ_RING_SIZE]);
+        assert_eq!(ring.index, 0);
+        assert_eq!(ring.avg, 0);
+        assert_eq!(ring, TqRing::default());
+
+    }
+
+    #[test]
+    fn push_test() {
+        assert!(TQ_RING_SIZE >= 2, "test assumes TQ_RING_SIZE >= 2");
+
+        let mut ring = TqRing::new();
+        ring.push(10);
+        assert_eq!(ring.values[0], 10);
+        assert_eq!(ring.index, 1);
+        assert_eq!(ring.avg, 10);
+
+        ring.push(20);
+        assert_eq!(ring.values[1], 20);
+        assert_eq!(ring.index, (2 % TQ_RING_SIZE) as u8);
+        assert_eq!(ring.avg, 15);
+
+        // fill whole ring: index wraps to 0
+        let mut ring = TqRing::new();
+        for i in 0..TQ_RING_SIZE {
+            ring.push((i + 1) as u8);
+        }
+        assert_eq!(ring.index, 0);
+        for i in 0..TQ_RING_SIZE {
+            assert_eq!(ring.values[i], (i + 1) as u8);
+        }
+        let expected = ((1..=TQ_RING_SIZE).sum::<usize>() / TQ_RING_SIZE) as u8;
+        assert_eq!(ring.avg, expected);
+
+        // next push overwrites oldest (slot 0), rest untouched
+        ring.push(200);
+        assert_eq!(ring.values[0], 200);
+        assert_eq!(ring.values[1], 2);
+        assert_eq!(ring.index, 1);
+
+    }
+    
+    #[test]
+    fn avg_test(){
+        let mut ring = TqRing::new();
+        assert_eq!(ring.avg(), 0);
+
+        ring.avg = 42;
+        assert_eq!(ring.avg(), 42);
+
+        // returns cached value, does not recompute
+        ring.values[0] = 200;
+        assert_eq!(ring.avg(), 42);
+
+    }
+
+    #[test]
+    fn values_test(){
+        let mut ring = TqRing::new();
+        assert_eq!(ring.values(), &[0u8; TQ_RING_SIZE]);
+
+        ring.values[0] = 7;
+        ring.values[TQ_RING_SIZE - 1] = 9;
+        assert_eq!(ring.values()[0], 7);
+        assert_eq!(ring.values()[TQ_RING_SIZE - 1], 9);
+        assert_eq!(ring.values().len(), TQ_RING_SIZE);
+    }
+    
+    #[test]
+    fn compute_avg_test() {
+        assert!(TQ_RING_SIZE >= 2, "test assumes TQ_RING_SIZE >= 2");
+        let mut ring = TqRing::new();
+
+        // all zero: 0, no div by zero
+        assert_eq!(ring.compute_avg(), 0);
+
+        // zeros ignored
+        ring.values[0] = 100;
+        assert_eq!(ring.compute_avg(), 100);
+
+        ring.values[1] = 50;
+        assert_eq!(ring.compute_avg(), 75);
+
+        // integer floor: 151 / 2
+        ring.values[1] = 51;
+        assert_eq!(ring.compute_avg(), 75);
+
+        // all max: u16 sum no overflow
+        ring.values = [255; TQ_RING_SIZE];
+        assert_eq!(ring.compute_avg(), 255);
+
+        // pure: cached avg field untouched
+        assert_eq!(ring.avg, 0);
+    }
+}
