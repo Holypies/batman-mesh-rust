@@ -26,6 +26,7 @@ const BATADV_TQ_MAX_VALUE:u8 = 255;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketError {
     TooShort { need: usize, got: usize },
+    TooLong { need: usize, got: usize },
     WrongType { expected: u16, got: u16 },
     UnknownType,
     BadVersion(u8),
@@ -52,7 +53,7 @@ pub trait Packet: Sized {
 
 fn need(got: usize, want: usize) -> Result<(), PacketError> {
     if got < want {
-        Err(PacketError::TooShort {
+        Err(PacketError::TooLong {
             need: want,
             got,
         })
@@ -280,7 +281,7 @@ mod ogm_off {
     pub const TVLV_LEN: usize = 22;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy,PartialEq, Eq)]
 pub struct BatmanAdvOGMPacket {
     packet_type: u8,
     version: u8,
@@ -374,12 +375,9 @@ impl BatmanAdvOGMPacket {
         self.tq=tq
     }
 
-    pub fn apply_hop_penalty(&mut self, penalty:u8){
-        let dif_pen = (TQ_MAX-penalty) as u32;
-        let dif = dif_pen/TQ_MAX as u32;
-        let dif_tq =self.tq as u32 *dif; 
-
-        self.tq = dif_tq as u8;
+    pub fn apply_hop_penalty(&mut self, penalty: u8) {
+        let max = TQ_MAX as u32;
+        self.tq = (self.tq as u32 * (max - penalty as u32) / max) as u8;
     }
 
     pub fn set_prev_sender(&mut self, sender:Mac){
@@ -430,7 +428,728 @@ impl Packet for BatmanAdvOGMPacket {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
-  //  use super::*;
+    use crate::consts::HOP_PENALTY;
+
+    use super::*;
+
+    // --- test helpers ---
+
+    const ORIG: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+    const PREV: [u8; 6] = [0x02, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
+    const DEST: [u8; 6] = [0x02, 0x66, 0x77, 0x88, 0x99, 0x00];
+    const SEQNO: u32 = 0x0102_0304;
+
+
+    fn mac(bytes: [u8; 6]) -> Mac {
+        Mac::from_octets(bytes)
+    }
+
+    /// wire bytes of BatmanAdvBroadcastPacket::new(mac(ORIG), SEQNO)
+    fn bcast_bytes() -> [u8; 14] {
+        [
+            BATADV_BCAST, BATADV_COMPAT_VERSION, BATADV_TTL, 0x00,
+            0x01, 0x02, 0x03, 0x04,
+            ORIG[0], ORIG[1], ORIG[2], ORIG[3], ORIG[4], ORIG[5],
+        ]
+    }
+
+    /// wire bytes of BatmanAdvUnicastPacket::new(mac(DEST))
+    fn unicast_bytes() -> [u8; 10] {
+        [
+            BATADV_UNICAST, BATADV_COMPAT_VERSION, BATADV_TTL, 0x00,
+            DEST[0], DEST[1], DEST[2], DEST[3], DEST[4], DEST[5],
+        ]
+    }
+
+    /// wire bytes of BatmanAdvOGMPacket::new(mac(ORIG), SEQNO)
+    fn ogm_bytes() -> [u8; 24] {
+        [
+            BATADV_IV_OGM, BATADV_COMPAT_VERSION, BATADV_TTL, BATADV_PRIMARIES_FIRST_HOP,
+            0x01, 0x02, 0x03, 0x04,
+            ORIG[0], ORIG[1], ORIG[2], ORIG[3], ORIG[4], ORIG[5],
+            ORIG[0], ORIG[1], ORIG[2], ORIG[3], ORIG[4], ORIG[5], // prev_sender = orig
+            0x00,                                                 // reserved
+            BATADV_TQ_MAX_VALUE,                                  // tq
+            0x00, 0x00,                                           // tvlv_len
+        ]
+    }
+
+    #[test]
+    fn constants_test(){
+        // batman-adv v15 wire values
+        assert_eq!(ETH_P_BATMAN, 0x4305);
+        assert_eq!(BATADV_COMPAT_VERSION, 15);
+        assert_eq!(BATADV_IV_OGM, 0x00);
+        assert_eq!(BATADV_BCAST, 0x01);
+        assert_eq!(BATADV_UNICAST, 0x40);
+        assert_eq!(BATADV_NOT_BEST_NEXT_HOP, 0x01);
+        assert_eq!(BATADV_PRIMARIES_FIRST_HOP, 0x02);
+        assert_eq!(BATADV_DIRECTLINK, 0x04);
+
+        // PACKET_TYPE matches type consts
+        assert_eq!(BatmanAdvBroadcastPacket::PACKET_TYPE, BATADV_BCAST);
+        assert_eq!(BatmanAdvUnicastPacket::PACKET_TYPE, BATADV_UNICAST);
+        assert_eq!(BatmanAdvOGMPacket::PACKET_TYPE, BATADV_IV_OGM);
+
+        // header sizes
+        assert_eq!(BatmanAdvBroadcastPacket::WIRE_LEN, 14);
+        assert_eq!(BatmanAdvUnicastPacket::WIRE_LEN, 10);
+        assert_eq!(BatmanAdvOGMPacket::WIRE_LEN, 24);
+
+        // last field ends exactly at WIRE_LEN
+        assert_eq!(bcast_off::ORIG + 6, BatmanAdvBroadcastPacket::WIRE_LEN);
+        assert_eq!(unicast_off::DEST + 6, BatmanAdvUnicastPacket::WIRE_LEN);
+        assert_eq!(ogm_off::TVLV_LEN + 2, BatmanAdvOGMPacket::WIRE_LEN);
+
+        // OGM fields contiguous, no gaps / overlaps
+        assert_eq!(ogm_off::SEQNO + 4, ogm_off::ORIG);
+        assert_eq!(ogm_off::ORIG + 6, ogm_off::PREV_SENDER);
+        assert_eq!(ogm_off::PREV_SENDER + 6, ogm_off::RESERVED);
+        assert_eq!(ogm_off::RESERVED + 1, ogm_off::TQ);
+        assert_eq!(ogm_off::TQ + 1, ogm_off::TVLV_LEN);
+
+        //TODO: Fix so ever function uses the same const
+        // new() uses BATADV_TQ_MAX_VALUE, apply_hop_penalty uses TQ_MAX: must agree
+        assert_eq!(TQ_MAX as u32, BATADV_TQ_MAX_VALUE as u32);
+
+    }
+
+    #[test]
+    fn need_test(){
+        assert_eq!(need(0, 0), Ok(()));
+        assert_eq!(need(5, 5), Ok(()));
+        assert_eq!(need(6, 5), Ok(()));
+        assert_eq!(need(4, 5), Err(PacketError::TooShort { need: 5, got: 4 }));
+        assert_eq!(need(0, 1), Err(PacketError::TooShort { need: 1, got: 0 }));
+
+    }
+
+    #[test]
+    fn peek_type_test(){
+        assert_eq!(peek_type(&[]), None);
+        assert_eq!(peek_type(&[BATADV_UNICAST]), Some(BATADV_UNICAST));
+        assert_eq!(peek_type(&ogm_bytes()), Some(BATADV_IV_OGM));
+        assert_eq!(peek_type(&bcast_bytes()), Some(BATADV_BCAST));
+
+        // no validation: any byte returned
+        assert_eq!(peek_type(&[0xFF, 0x00]), Some(0xFF));
+
+    }
+
+    #[test]
+    fn peek_version_test(){
+        assert_eq!(peek_version(&[]), None);
+        assert_eq!(peek_version(&[BATADV_BCAST]), None);
+        assert_eq!(peek_version(&bcast_bytes()), Some(BATADV_COMPAT_VERSION));
+
+        // no validation: any byte returned
+        assert_eq!(peek_version(&[0x00, 0xFF]), Some(0xFF));
+
+    }
+
+    #[test]
+    fn check_header_test(){
+        let mut buf = [0u8; 10];
+        buf[OFF_TYPE] = BATADV_UNICAST;
+        buf[OFF_VERSION] = BATADV_COMPAT_VERSION;
+
+        // exact len wanted
+        assert_eq!(check_header(&buf, 10, BATADV_UNICAST), Ok(()));
+        // TODO: see if we need to limit this functionality
+        // shorter then wanted
+        assert_eq!(check_header(&buf, 8, BATADV_UNICAST), Ok(()));
+
+        // longer than wanted
+        assert_eq!(
+            check_header(&buf, 11, BATADV_UNICAST),
+            Err(PacketError::TooLong { need: 11, got: 10 })
+        );
+
+        // length checked before type
+        assert_eq!(
+            check_header(&buf, 11, BATADV_BCAST),
+            Err(PacketError::TooLong { need: 11, got: 10 })
+        );
+
+        // wrong type
+        assert_eq!(
+            check_header(&buf, 10, BATADV_BCAST),
+            Err(PacketError::WrongType {
+                expected: BATADV_BCAST as u16,
+                got: BATADV_UNICAST as u16,
+            })
+        );
+
+        // type checked before version
+        buf[OFF_VERSION] = 14;
+        assert_eq!(
+            check_header(&buf, 10, BATADV_BCAST),
+            Err(PacketError::WrongType {
+                expected: BATADV_BCAST as u16,
+                got: BATADV_UNICAST as u16,
+            })
+        );
+
+        // bad version
+        assert_eq!(check_header(&buf, 10, BATADV_UNICAST), Err(PacketError::BadVersion(14)));
+
+    }
+
+    #[test]
+    fn wire_len_test(){
+        assert_eq!(
+            BatmanAdvBroadcastPacket::new(mac(ORIG), 0).wire_len(),
+            BatmanAdvBroadcastPacket::WIRE_LEN
+        );
+        assert_eq!(
+            BatmanAdvUnicastPacket::new(mac(DEST)).wire_len(),
+            BatmanAdvUnicastPacket::WIRE_LEN
+        );
+        assert_eq!(
+            BatmanAdvOGMPacket::new(mac(ORIG), 0).wire_len(),
+            BatmanAdvOGMPacket::WIRE_LEN
+        );
+
+    }
+
+    #[test]
+    fn parse_cross_type_test(){
+        // bcast bytes long enough for unicast: type mismatch
+        assert_eq!(
+            BatmanAdvUnicastPacket::parse(&bcast_bytes()),
+            Err(PacketError::WrongType {
+                expected: BATADV_UNICAST as u16,
+                got: BATADV_BCAST as u16,
+            })
+        );
+
+        // unicast bytes too short for bcast: length wins
+        assert_eq!(
+            BatmanAdvBroadcastPacket::parse(&unicast_bytes()),
+            Err(PacketError::TooShort { need: 14, got: 10 })
+        );
+
+        // ogm bytes into bcast parser
+        assert_eq!(
+            BatmanAdvBroadcastPacket::parse(&ogm_bytes()),
+            Err(PacketError::WrongType {
+                expected: BATADV_BCAST as u16,
+                got: BATADV_IV_OGM as u16,
+            })
+        );
+
+    }
+
+    // --- Broadcast tests ---
+    #[test]
+    fn bcast_new_test(){
+        let p = BatmanAdvBroadcastPacket::new(mac(ORIG), SEQNO);
+        assert_eq!(p.packet_type(), BATADV_BCAST);
+        assert_eq!(p.version(), BATADV_COMPAT_VERSION);
+        assert_eq!(p.ttl(), BATADV_TTL);
+        assert_eq!(p.reserved(), 0);
+        assert_eq!(p.seqno(), SEQNO);
+        assert_eq!(p.originator(), mac(ORIG));
+
+    }
+
+        #[test]
+    fn bcast_decrement_ttl_test(){
+        let base = BatmanAdvBroadcastPacket::new(mac(ORIG), SEQNO);
+        let mut p = base;
+
+        assert!(p.decrement_ttl());
+        assert_eq!(p.ttl(), BATADV_TTL - 1);
+
+        // 2 -> 1 allowed
+        p.ttl = 2;
+        assert!(p.decrement_ttl());
+        assert_eq!(p.ttl(), 1);
+
+        // 1: refused, unchanged
+        assert!(!p.decrement_ttl());
+        assert_eq!(p.ttl(), 1);
+
+        // 0: refused, no underflow
+        p.ttl = 0;
+        assert!(!p.decrement_ttl());
+        assert_eq!(p.ttl(), 0);
+
+        p.ttl = u8::MAX;
+        assert!(p.decrement_ttl());
+        assert_eq!(p.ttl(), u8::MAX - 1);
+
+        // only ttl touched
+        let mut q = base;
+        q.decrement_ttl();
+        q.ttl = base.ttl;
+        assert_eq!(q, base);
+
+    }
+
+    #[test]
+    fn bcast_write_test(){
+        let p = BatmanAdvBroadcastPacket::new(mac(ORIG), SEQNO);
+
+        // exact layout, seqno big-endian
+        let mut buf = [0xEEu8; 16];
+        assert_eq!(p.write(&mut buf), Ok(()));
+        assert_eq!(&buf[..14], &bcast_bytes()[..]);
+        // bytes past header untouched
+        assert_eq!(&buf[14..], &[0xEEu8; 2]);
+
+        // exact-size buffer
+        let mut exact = [0u8; 14];
+        assert_eq!(p.write(&mut exact), Ok(()));
+        assert_eq!(exact, bcast_bytes());
+
+        // too short: error, buffer untouched
+        let mut short = [0u8; 13];
+        assert_eq!(p.write(&mut short), Err(PacketError::TooShort { need: 14, got: 13 }));
+        assert_eq!(short, [0u8; 13]);
+
+        let mut empty: [u8; 0] = [];
+        assert_eq!(p.write(&mut empty), Err(PacketError::TooShort { need: 14, got: 0 }));
+
+    }
+
+    #[test]
+    fn bcast_parse_test(){
+        let expected = BatmanAdvBroadcastPacket::new(mac(ORIG), SEQNO);
+        assert_eq!(BatmanAdvBroadcastPacket::parse(&bcast_bytes()), Ok(expected));
+
+        // trailing payload ignored
+        let mut long = [0xEEu8; 20];
+        long[..14].copy_from_slice(&bcast_bytes());
+        assert_eq!(BatmanAdvBroadcastPacket::parse(&long), Ok(expected));
+
+        // non-default fields carried through
+        let mut raw = bcast_bytes();
+        raw[bcast_off::TTL] = 7;
+        raw[bcast_off::RESERVED] = 0x5A;
+        let p = BatmanAdvBroadcastPacket::parse(&raw).unwrap();
+        assert_eq!(p.ttl(), 7);
+        assert_eq!(p.reserved(), 0x5A);
+
+        // too short
+        assert_eq!(
+            BatmanAdvBroadcastPacket::parse(&bcast_bytes()[..13]),
+            Err(PacketError::TooShort { need: 14, got: 13 })
+        );
+        assert_eq!(
+            BatmanAdvBroadcastPacket::parse(&[]),
+            Err(PacketError::TooShort { need: 14, got: 0 })
+        );
+
+        // wrong type
+        let mut raw = bcast_bytes();
+        raw[OFF_TYPE] = BATADV_UNICAST;
+        assert_eq!(
+            BatmanAdvBroadcastPacket::parse(&raw),
+            Err(PacketError::WrongType {
+                expected: BATADV_BCAST as u16,
+                got: BATADV_UNICAST as u16,
+            })
+        );
+
+        // bad version
+        let mut raw = bcast_bytes();
+        raw[OFF_VERSION] = 14;
+        assert_eq!(BatmanAdvBroadcastPacket::parse(&raw), Err(PacketError::BadVersion(14)));
+
+    }
+
+    #[test]
+    fn bcast_round_trip_test(){
+        for &seqno in [0u32, 1, SEQNO, u32::MAX].iter() {
+            let mut p = BatmanAdvBroadcastPacket::new(mac(ORIG), seqno);
+            p.decrement_ttl();
+            let mut buf = [0u8; 14];
+            assert_eq!(p.write(&mut buf), Ok(()));
+            assert_eq!(BatmanAdvBroadcastPacket::parse(&buf), Ok(p));
+        }
+    }
+
+    // --- Unicast tests ---
+    #[test]
+    fn unicast_new_test(){
+        let p = BatmanAdvUnicastPacket::new(mac(DEST));
+        assert_eq!(p.packet_type(), BATADV_UNICAST);
+        assert_eq!(p.version(), BATADV_COMPAT_VERSION);
+        assert_eq!(p.ttl(), BATADV_TTL);
+        assert_eq!(p.ttvn(), 0);
+        assert_eq!(p.dest(), mac(DEST));
+
+    }
+
+    #[test]
+    fn unicast_decrement_ttl_test(){
+        let base = BatmanAdvUnicastPacket::new(mac(DEST));
+        let mut p = base;
+
+        assert!(p.decrement_ttl());
+        assert_eq!(p.ttl(), BATADV_TTL - 1);
+
+        p.ttl = 2;
+        assert!(p.decrement_ttl());
+        assert_eq!(p.ttl(), 1);
+
+        assert!(!p.decrement_ttl());
+        assert_eq!(p.ttl(), 1);
+
+        p.ttl = 0;
+        assert!(!p.decrement_ttl());
+        assert_eq!(p.ttl(), 0);
+
+        // only ttl touched
+        let mut q = base;
+        q.decrement_ttl();
+        q.ttl = base.ttl;
+        assert_eq!(q, base);
+    }
+
+    #[test]
+    fn unicast_write_test(){
+        let p = BatmanAdvUnicastPacket::new(mac(DEST));
+
+        let mut buf = [0xEEu8; 12];
+        assert_eq!(p.write(&mut buf), Ok(()));
+        assert_eq!(&buf[..10], &unicast_bytes()[..]);
+        assert_eq!(&buf[10..], &[0xEEu8; 2]);
+
+        // ttvn written at its offset
+        let mut q = p;
+        q.ttvn = 9;
+        let mut buf = [0u8; 10];
+        assert_eq!(q.write(&mut buf), Ok(()));
+        assert_eq!(buf[unicast_off::TTVN], 9);
+
+        // too short: error, buffer untouched
+        let mut short = [0u8; 9];
+        assert_eq!(p.write(&mut short), Err(PacketError::TooShort { need: 10, got: 9 }));
+        assert_eq!(short, [0u8; 9]);
+    }
+
+    #[test]
+    fn unicast_parse_test(){
+        let expected = BatmanAdvUnicastPacket::new(mac(DEST));
+        assert_eq!(BatmanAdvUnicastPacket::parse(&unicast_bytes()), Ok(expected));
+
+        // trailing payload ignored
+        let mut long = [0xEEu8; 64];
+        long[..10].copy_from_slice(&unicast_bytes());
+        assert_eq!(BatmanAdvUnicastPacket::parse(&long), Ok(expected));
+
+        // non-default fields carried through
+        let mut raw = unicast_bytes();
+        raw[unicast_off::TTL] = 3;
+        raw[unicast_off::TTVN] = 9;
+        let p = BatmanAdvUnicastPacket::parse(&raw).unwrap();
+        assert_eq!(p.ttl(), 3);
+        assert_eq!(p.ttvn(), 9);
+
+        // too short
+        assert_eq!(
+            BatmanAdvUnicastPacket::parse(&unicast_bytes()[..9]),
+            Err(PacketError::TooShort { need: 10, got: 9 })
+        );
+
+        // wrong type
+        let mut raw = unicast_bytes();
+        raw[OFF_TYPE] = BATADV_BCAST;
+        assert_eq!(
+            BatmanAdvUnicastPacket::parse(&raw),
+            Err(PacketError::WrongType {
+                expected: BATADV_UNICAST as u16,
+                got: BATADV_BCAST as u16,
+            })
+        );
+
+        // bad version
+        let mut raw = unicast_bytes();
+        raw[OFF_VERSION] = 16;
+        assert_eq!(BatmanAdvUnicastPacket::parse(&raw), Err(PacketError::BadVersion(16)));
+    }
+
+    #[test]
+    fn unicast_round_trip_test(){
+        let mut p = BatmanAdvUnicastPacket::new(mac(DEST));
+        p.ttvn = 0xFF;
+        p.decrement_ttl();
+        let mut buf = [0u8; 10];
+        assert_eq!(p.write(&mut buf), Ok(()));
+        assert_eq!(BatmanAdvUnicastPacket::parse(&buf), Ok(p));
+    }
+
+    // --- OGM tests ---
+    #[test]
+    fn ogm_new_test(){
+        let p = BatmanAdvOGMPacket::new(mac(ORIG), SEQNO);
+        assert_eq!(p.packet_type(), BATADV_IV_OGM);
+        assert_eq!(p.version(), BATADV_COMPAT_VERSION);
+        assert_eq!(p.ttl(), BATADV_TTL);
+        assert_eq!(p.flags(), BATADV_PRIMARIES_FIRST_HOP);
+        assert_eq!(p.seqno(), SEQNO);
+        assert_eq!(p.originator(), mac(ORIG));
+        assert_eq!(p.prev_sender(), mac(ORIG));
+        assert_eq!(p.reserved(), 0);
+        assert_eq!(p.tq(), BATADV_TQ_MAX_VALUE);
+        assert_eq!(p.tvlv_len(), 0);
+    }
+
+    #[test]
+    fn ogm_flags_test(){
+        let mut p = BatmanAdvOGMPacket::new(mac(ORIG), SEQNO);
+        assert!(p.has_flag(BATADV_PRIMARIES_FIRST_HOP));
+        assert!(!p.has_flag(BATADV_DIRECTLINK));
+        assert!(!p.has_flag(BATADV_NOT_BEST_NEXT_HOP));
+
+        // set adds bit, keeps others
+        p.set_flag(BATADV_DIRECTLINK);
+        assert_eq!(p.flags(), BATADV_PRIMARIES_FIRST_HOP | BATADV_DIRECTLINK);
+
+        // set idempotent
+        p.set_flag(BATADV_DIRECTLINK);
+        assert_eq!(p.flags(), BATADV_PRIMARIES_FIRST_HOP | BATADV_DIRECTLINK);
+
+        // multi-bit mask needs every bit
+        assert!(p.has_flag(BATADV_PRIMARIES_FIRST_HOP | BATADV_DIRECTLINK));
+        assert!(!p.has_flag(BATADV_DIRECTLINK | BATADV_NOT_BEST_NEXT_HOP));
+
+        // clear removes bit, keeps others
+        p.clear_flag(BATADV_PRIMARIES_FIRST_HOP);
+        assert_eq!(p.flags(), BATADV_DIRECTLINK);
+
+        // clearing unset flag: no-op
+        p.clear_flag(BATADV_NOT_BEST_NEXT_HOP);
+        assert_eq!(p.flags(), BATADV_DIRECTLINK);
+
+        // clear_flags wipes all
+        p.set_flag(BATADV_NOT_BEST_NEXT_HOP);
+        p.clear_flags();
+        assert_eq!(p.flags(), 0);
+        assert!(!p.has_flag(BATADV_DIRECTLINK));
+
+    }
+
+    #[test]
+    fn ogm_decrement_ttl_test(){
+        let base = BatmanAdvOGMPacket::new(mac(ORIG), SEQNO);
+        let mut p = base;
+
+        assert!(p.decrement_ttl());
+        assert_eq!(p.ttl(), BATADV_TTL - 1);
+
+        p.ttl = 2;
+        assert!(p.decrement_ttl());
+        assert_eq!(p.ttl(), 1);
+
+        assert!(!p.decrement_ttl());
+        assert_eq!(p.ttl(), 1);
+
+        p.ttl = 0;
+        assert!(!p.decrement_ttl());
+        assert_eq!(p.ttl(), 0);
+
+        // only ttl touched
+        let mut q = base;
+        q.decrement_ttl();
+        q.ttl = base.ttl;
+        assert_eq!(q, base);
+    }
+
+    #[test]
+    fn ogm_set_tq_test(){
+        let base = BatmanAdvOGMPacket::new(mac(ORIG), SEQNO);
+        let mut p = base;
+
+        p.set_tq(0);
+        assert_eq!(p.tq(), 0);
+        p.set_tq(128);
+        assert_eq!(p.tq(), 128);
+
+        // only tq touched
+        p.set_tq(base.tq());
+        assert_eq!(p, base);
+    }
+
+    #[test]
+    fn ogm_set_prev_sender_test(){
+        let base = BatmanAdvOGMPacket::new(mac(ORIG), SEQNO);
+        let mut p = base;
+
+        p.set_prev_sender(mac(PREV));
+        assert_eq!(p.prev_sender(), mac(PREV));
+        // originator unaffected
+        assert_eq!(p.originator(), mac(ORIG));
+
+        // only prev_sender touched
+        p.set_prev_sender(mac(ORIG));
+        assert_eq!(p, base);
+    }
+
+    #[test]
+    fn apply_hop_penalty_test(){
+        let orig = Mac::ZERO;
+        let mut ogm = BatmanAdvOGMPacket::new(orig, 0);
+        assert_eq!(ogm.tq(),255);
+
+        ogm.apply_hop_penalty(HOP_PENALTY);
+        assert_eq!(ogm.tq(),225);
+
+        // second hop compounds: 225 * 225 / 255 = 198.5 -> floor
+        ogm.apply_hop_penalty(HOP_PENALTY);
+        assert_eq!(ogm.tq(), 198);
+
+        // zero penalty: unchanged
+        ogm.set_tq(255);
+        ogm.apply_hop_penalty(0);
+        assert_eq!(ogm.tq(), 255);
+
+        // max penalty: zero
+        ogm.set_tq(255);
+        ogm.apply_hop_penalty(255);
+        assert_eq!(ogm.tq(), 0);
+
+        // zero tq stays zero
+        ogm.set_tq(0);
+        ogm.apply_hop_penalty(30);
+        assert_eq!(ogm.tq(), 0);
+
+        // integer floor: 100 * 225 / 255 = 88.2
+        ogm.set_tq(100);
+        ogm.apply_hop_penalty(30);
+        assert_eq!(ogm.tq(), 88);
+
+        // small tq rounds to zero: 1 * 254 / 255
+        ogm.set_tq(1);
+        ogm.apply_hop_penalty(1);
+        assert_eq!(ogm.tq(), 0);
+
+        // product 255 * 254 must not overflow
+        ogm.set_tq(255);
+        ogm.apply_hop_penalty(1);
+        assert_eq!(ogm.tq(), 254);
+
+        // only tq touched
+        let base = BatmanAdvOGMPacket::new(mac(ORIG), SEQNO);
+        let mut p = base;
+        p.apply_hop_penalty(30);
+        p.tq = base.tq;
+        assert_eq!(p, base);
+    }
+
+    #[test]
+    fn ogm_write_test(){
+        // default packet matches reference bytes
+        let p = BatmanAdvOGMPacket::new(mac(ORIG), SEQNO);
+        let mut buf = [0u8; 24];
+        assert_eq!(p.write(&mut buf), Ok(()));
+        assert_eq!(buf, ogm_bytes());
+
+        // every field distinct, checks offsets + byte order
+        let mut q = p;
+        q.set_prev_sender(mac(PREV));
+        q.set_flag(BATADV_DIRECTLINK);
+        q.set_tq(0xAB);
+        q.reserved = 0x5A;
+        q.tvlv_len = 0x0102; // no setter; checks u16 big-endian
+        let expected: [u8; 24] = [
+            BATADV_IV_OGM, BATADV_COMPAT_VERSION, BATADV_TTL,
+            BATADV_PRIMARIES_FIRST_HOP | BATADV_DIRECTLINK,
+            0x01, 0x02, 0x03, 0x04,
+            ORIG[0], ORIG[1], ORIG[2], ORIG[3], ORIG[4], ORIG[5],
+            PREV[0], PREV[1], PREV[2], PREV[3], PREV[4], PREV[5],
+            0x5A,
+            0xAB,
+            0x01, 0x02,
+        ];
+        let mut buf = [0xEEu8; 26];
+        assert_eq!(q.write(&mut buf), Ok(()));
+        assert_eq!(&buf[..24], &expected[..]);
+        // bytes past header untouched
+        assert_eq!(&buf[24..], &[0xEEu8; 2]);
+
+        // too short: error, buffer untouched
+        let mut short = [0u8; 23];
+        assert_eq!(p.write(&mut short), Err(PacketError::TooShort { need: 24, got: 23 }));
+        assert_eq!(short, [0u8; 23]);
+
+    }
+
+    #[test]
+    fn ogm_parse_test(){
+        let expected = BatmanAdvOGMPacket::new(mac(ORIG), SEQNO);
+        assert_eq!(BatmanAdvOGMPacket::parse(&ogm_bytes()), Ok(expected));
+
+        // trailing payload ignored
+        let mut long = [0xEEu8; 40];
+        long[..24].copy_from_slice(&ogm_bytes());
+        assert_eq!(BatmanAdvOGMPacket::parse(&long), Ok(expected));
+
+        // non-default fields carried through
+        let mut raw = ogm_bytes();
+        raw[ogm_off::FLAGS] = BATADV_DIRECTLINK;
+        raw[ogm_off::PREV_SENDER..ogm_off::PREV_SENDER + 6].copy_from_slice(&PREV);
+        raw[ogm_off::RESERVED] = 0x5A;
+        raw[ogm_off::TQ] = 0x10;
+        let p = BatmanAdvOGMPacket::parse(&raw).unwrap();
+        assert_eq!(p.flags(), BATADV_DIRECTLINK);
+        assert_eq!(p.prev_sender(), mac(PREV));
+        assert_eq!(p.originator(), mac(ORIG));
+        assert_eq!(p.reserved(), 0x5A);
+        assert_eq!(p.tq(), 0x10);
+
+        // nonzero tvlv_len (either byte): rejected
+        let mut raw = ogm_bytes();
+        raw[ogm_off::TVLV_LEN + 1] = 0x01;
+        assert_eq!(BatmanAdvOGMPacket::parse(&raw), Err(PacketError::UnknownType));
+        let mut raw = ogm_bytes();
+        raw[ogm_off::TVLV_LEN] = 0x01;
+        assert_eq!(BatmanAdvOGMPacket::parse(&raw), Err(PacketError::UnknownType));
+
+        // header checks before tvlv check
+        raw[OFF_VERSION] = 14;
+        assert_eq!(BatmanAdvOGMPacket::parse(&raw), Err(PacketError::BadVersion(14)));
+
+        // too short
+        assert_eq!(
+            BatmanAdvOGMPacket::parse(&ogm_bytes()[..23]),
+            Err(PacketError::TooShort { need: 24, got: 23 })
+        );
+
+        // wrong type
+        let mut raw = ogm_bytes();
+        raw[OFF_TYPE] = BATADV_BCAST;
+        assert_eq!(
+            BatmanAdvOGMPacket::parse(&raw),
+            Err(PacketError::WrongType {
+                expected: BATADV_IV_OGM as u16,
+                got: BATADV_BCAST as u16,
+            })
+        );
+
+        // bad version
+        let mut raw = ogm_bytes();
+        raw[OFF_VERSION] = 14;
+        assert_eq!(BatmanAdvOGMPacket::parse(&raw), Err(PacketError::BadVersion(14)));
+
+    }
+        
+    #[test]
+    fn ogm_round_trip_test(){
+        for &seqno in [0u32, SEQNO, u32::MAX].iter() {
+            let mut p = BatmanAdvOGMPacket::new(mac(ORIG), seqno);
+            p.set_prev_sender(mac(PREV));
+            p.set_flag(BATADV_DIRECTLINK);
+            p.apply_hop_penalty(HOP_PENALTY);
+            p.decrement_ttl();
+            let mut buf = [0u8; 24];
+            assert_eq!(p.write(&mut buf), Ok(()));
+            assert_eq!(BatmanAdvOGMPacket::parse(&buf), Ok(p));
+        }
+    }
 
 }
