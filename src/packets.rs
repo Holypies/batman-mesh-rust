@@ -428,7 +428,6 @@ impl Packet for BatmanAdvOGMPacket {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use crate::consts::HOP_PENALTY;
 

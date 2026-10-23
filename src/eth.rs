@@ -213,7 +213,6 @@ mod test{
     }
 
     // --- functions ---
-    // TODO: implement tests
     #[test]
     fn parse_test(){
         let buf = [

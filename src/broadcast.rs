@@ -1,6 +1,6 @@
 use crate::FrameError::TooLarge;
 use crate::InterfaceError::InterfaceDown;
-use crate::framebuffer::{BroadcastFrame, FrameBuffer, FrameError};
+use crate::framebuffer::{ FrameBuffer, FrameError};
 use crate::meshctx::{TransmitionError, DropReason};
 use crate::hardif::{HardInterface, LinkDriver};
 use crate::originatortable::OriginatorTable;

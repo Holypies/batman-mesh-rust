@@ -66,28 +66,28 @@ mod tests{
     #[test]
     fn read_u32_test(){
         let buf= [0x12, 0x34, 0x56, 0x78];
-        let read = read_u16(&buf, 0);
+        let read = read_u32(&buf, 0);
         assert_eq!(read, 0x12345678);
     }
 
     #[test]
     fn read_u32_offset_test(){
         let buf= [0x12, 0x34, 0x56, 0x78, 0x9F];
-        let read = read_u16(&buf, 1);
+        let read = read_u32(&buf, 1);
         assert_eq!(read, 0x3456789F);
     }
 
     #[test]
     fn write_u32_test(){
         let mut buf = [0x00,0x00,0x00,0x00];
-        write_u16(&mut buf, 0, 0x12345678);
+        write_u32(&mut buf, 0, 0x12345678);
         assert_eq!(buf, [0x12, 0x34, 0x56, 0x78]);
     }
 
     #[test]
     fn write_u32_offset_test(){
         let mut buf= [0x12, 0x34, 0x56, 0x78, 0x9F];
-        write_u16(&mut buf, 1,0x12345678);
+        write_u32(&mut buf, 1,0x12345678);
         assert_eq!(buf, [0x12, 0x12, 0x34, 0x56, 0x78]);
     }
 

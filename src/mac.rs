@@ -145,15 +145,17 @@ mod tests {
     fn from_octets_test(){
         let buf = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
         let mac =Mac::from_octets(buf);
-        assert_eq!(buf,mac);
+        assert_eq!(buf,mac.0);
     }
+
     #[test]
     fn from_random_bytes_test(){
         let mut buf = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
         let mac =Mac::from_random_bytes(buf);
         buf[0]=(buf[0] & !Mac::GROUP_BIT) | Mac::LOCAL_BIT;
-        assert_eq!(buf,mac);
+        assert_eq!(buf,mac.0);
     }
+
     #[test]
     fn from_slice_test(){
         let buf = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
@@ -172,11 +174,13 @@ mod tests {
         assert_eq!(slice1,  Mac::ZERO);
 
     }
+
     #[test]
     fn as_octets_test(){
         let mac = Mac::BROADCAST;
         assert_eq!(mac.as_octets(), [0xFF; 6])
     }
+
     #[test]
     fn read_at_test(){
         // tests offest 0
@@ -189,6 +193,7 @@ mod tests {
         let read1 = Mac::read_at(&buf1, 1);
         assert_eq!(read1,  Mac([0x22, 0x33, 0x44, 0x55, 0x66,0x77]));
     }
+
     #[test]
     fn write_at_test(){
         // tests offest 0
@@ -204,6 +209,7 @@ mod tests {
         assert_eq!(mac1,  Mac([0x22, 0x33, 0x44, 0x55, 0x66,0x77]));
 
     }
+
     #[test]
     fn all_octets_test(){
         let mac = Mac::ZERO;
@@ -212,6 +218,7 @@ mod tests {
         let mac2 =Mac::STP;
         assert_eq!(mac2.all_octets(0x00), false);
     }
+
     #[test]
     fn is_multicast_test(){
         let bcast = Mac::BROADCAST;
@@ -220,6 +227,7 @@ mod tests {
         let non_multicast_bcast = Mac([0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
         assert_eq!(non_multicast_bcast.is_multicast(), false);
     }
+
     #[test]
     fn is_unicast_test(){
         let bcast = Mac::BROADCAST;
@@ -228,6 +236,7 @@ mod tests {
         let unicast = Mac([0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
         assert_eq!(unicast.is_unicast(), true);
     }
+
     #[test]
     fn is_broadcast_test(){
         let bcast = Mac::BROADCAST;
@@ -236,6 +245,7 @@ mod tests {
         let non_multicast_bcast = Mac([0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
         assert_eq!(non_multicast_bcast.is_multicast(), false);
     }
+
     #[test]
     fn is_zero_test(){
         let zero = Mac::ZERO;
@@ -244,6 +254,7 @@ mod tests {
         let non_zero = Mac([0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
         assert_eq!(non_zero.is_zero(), false);
     }
+    
     #[test]
     fn is_valid_test(){
         let bcast = Mac::BROADCAST;

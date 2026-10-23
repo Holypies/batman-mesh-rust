@@ -424,11 +424,10 @@ impl TqRing {
     }
 }
 
-
+#[cfg(test)]
 mod tests{
-    use crate::time::micros;
-
     use super::*;
+    use crate::time::micros;
 
     const STP_MAC:Mac = Mac::STP;
     const BROADCAST_MAC: Mac = Mac::BROADCAST;
@@ -463,7 +462,7 @@ mod tests{
     fn mac(n: u8) -> Mac {
         Mac::from_octets([0x02, 0x00, 0x00, 0x00, 0x00, n])
     }
-
+    
     // --- Originator tests ---
     #[test]
     fn add_neighbor_test(){
