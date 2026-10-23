@@ -41,13 +41,15 @@ impl OriginatorTable{
     }
     
     pub fn add(&mut self, mut orig:Originator, now: Instant)->Result<(), OriginatorTableError>{
+        if self.find_mac(orig.mac()).is_some() {
+            return Err(OriginatorTableError::AlreadyInTable);
+        }
+
         if self.list.is_full(){
             return Err(OriginatorTableError::TableFull);
         }
        
-        if self.find_mac(orig.mac()).is_some() {
-            return Err(OriginatorTableError::AlreadyInTable);
-        }
+        
 
         orig.touch(now);
         match self.list.push(orig) {
@@ -73,6 +75,9 @@ impl OriginatorTable{
             Some(path) => path,
             Option::None => return false,
         };
+        if candidate_path.tq_avg() == 0 {
+            return false;
+        }
         
         let router_mac = match originator.router_id() {
             Some(mac) => mac,

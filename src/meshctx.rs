@@ -52,7 +52,7 @@ impl From<OriginatorError> for DropReason {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransmitionError{
     FrameBuffer(FrameError),
     Packet(PacketError),
@@ -897,5 +897,5 @@ use crate::time::earliest;
         assert_eq!(c.next_purge(), late + PURGE_PERIOD);
 
     }
-    
+
 }

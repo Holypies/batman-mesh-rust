@@ -125,9 +125,6 @@ pub fn window_protection(
     WindowCheck::Reset
 }
 
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,17 +146,35 @@ mod tests {
     fn bitwindow_contains_test(){
         let window = BitWindow(0x0000000F);
         let last = 0xFFFF;
-        let seqno=0xFFF0;
-        assert_eq!(window.contains(last, seqno), true);
+        assert!(window.contains(last, 0xFFFF));   // bit 0: last itself
+        assert!(window.contains(last, 0xFFFC));   // bit 3: oldest set bit
+        assert!(!window.contains(last, 0xFFFB));  // bit 4: in range, not set
+        assert!(!window.contains(last, 0xFFF0));  // bit 15: in range, not set
+        assert!(!window.contains(last, 0x1_0000)); // newer than last: never "seen"
+        assert!(!window.contains(last, last.wrapping_sub(64))); // just outside the window
 
-        let seqno=0xFFFF;
-        assert_eq!(window.contains(last, seqno), false);
+        // Wrap-around: last just past zero, seqno just before it.
+        let window = BitWindow(0b1000); // only bit 3 set
+        assert!(window.contains(2, 0xFFFF_FFFF)); // 2 - (-1) = 3 back
     }
     #[test]
     fn bitwindow_set_test(){
         let mut window = BitWindow(0);
-        window.set(0xFFFF);
-        assert_eq!(window.0,0xFFFF);
+        
+        window.set(0);                       // the newest seqno
+        assert_eq!(window.0, 0b1);
+
+        window.set(3);                       // three back
+        assert_eq!(window.0, 0b1001);
+
+        window.set(63);                      // oldest position in the window
+        assert_eq!(window.0, 0b1001 | (1 << 63));
+
+        // Out of range: ignored, nothing changes.
+        let before = window.0;
+        window.set(64);
+        window.set(-1);                      // only if set takes an i32
+        assert_eq!(window.0, before);
     }
     #[test]
     fn window_protection_test() {

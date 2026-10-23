@@ -158,27 +158,26 @@ mod tests {
 
     #[test]
     fn from_slice_test(){
+        let mac = Mac([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+
+        // Exactly six octets
         let buf = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
-        let slice = match Mac::from_slice(&buf){
-            Some(val)=>val,
-            Option::None => Mac::ZERO,
-        };
-        assert_eq!(slice,  Mac([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]));
+        assert_eq!(Mac::from_slice(&buf), Some(mac));
 
+        // Longer buffer: the first six octets, the rest ignored
+        let longer = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x00];
+        assert_eq!(Mac::from_slice(&longer), Some(mac));
 
-        let buf1= [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x00];
-        let slice1 = match Mac::from_slice(&buf1){
-            Some(val)=>val,
-            Option::None => Mac::ZERO,
-        };
-        assert_eq!(slice1,  Mac::ZERO);
+        // Too short: None
+        assert_eq!(Mac::from_slice(&buf[..5]), None);
+        assert_eq!(Mac::from_slice(&[]), None);
 
     }
 
     #[test]
     fn as_octets_test(){
         let mac = Mac::BROADCAST;
-        assert_eq!(mac.as_octets(), [0xFF; 6])
+        assert_eq!(mac.as_octets(), &[0xFFu8; 6])
     }
 
     #[test]
@@ -195,19 +194,21 @@ mod tests {
     }
 
     #[test]
-    fn write_at_test(){
-        // tests offest 0
-        let mut buf = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
-        let mac = Mac::ZERO;
+    fn write_at_test() {
+        let mac = Mac([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+
+        // Offset 0: the buffer becomes the address
+        let mut buf = [0u8; 6];
         mac.write_at(&mut buf, 0);
-        assert_eq!(mac, Mac([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]));
+        assert_eq!(buf, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
 
-        // tests offset 1
-        let mut buf1 = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77];
-        let mac1 = Mac::ZERO;
-        mac1.write_at(&mut buf1, 1);
-        assert_eq!(mac1,  Mac([0x22, 0x33, 0x44, 0x55, 0x66,0x77]));
+        // Offset 1: the address lands at 1..7, the bytes around it are untouched
+        let mut buf = [0u8; 8];
+        mac.write_at(&mut buf, 1);
+        assert_eq!(buf, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x00]);
 
+        // Round trip: read_at gets back exactly what write_at wrote
+        assert_eq!(Mac::read_at(&buf, 1), mac);
     }
 
     #[test]
@@ -254,7 +255,7 @@ mod tests {
         let non_zero = Mac([0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
         assert_eq!(non_zero.is_zero(), false);
     }
-    
+
     #[test]
     fn is_valid_test(){
         let bcast = Mac::BROADCAST;

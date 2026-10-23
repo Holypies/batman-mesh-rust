@@ -128,7 +128,6 @@ pub const fn bcast_repeat_time(now: Instant)->Instant{
 mod test{
     use super::*;
 
-    const NOW: Instant = Instant::from_ticks(0);
 
     fn at(us:u64)->Instant{
         Instant::from_ticks(us)
@@ -143,26 +142,26 @@ mod test{
         
     }
     #[test]
-    fn millis_test(){
-        assert_eq!(millis(0).ticks(),0);
-        assert_eq!(millis(1).ticks(),1_000);
-        assert_eq!(millis(2_136).ticks(),2_136_000);
-        let max = u64::MAX;
-        let mil_max = max/1_000;
-        assert_eq!(millis(mil_max).ticks(),max);
-        assert_eq!(millis(mil_max + 1).ticks(), max);
-        assert_eq!(millis(max).ticks(), max);
-    }
-    #[test]
-    fn secs_test(){
-        assert_eq!(secs(0).ticks(),0);
-        assert_eq!(secs(1).ticks(),1_000_000);
+    fn millis_test() {
+        assert_eq!(millis(0).ticks(), 0);
+        assert_eq!(millis(1).ticks(), 1_000);
+        assert_eq!(millis(2_136).ticks(), 2_136_000);
 
-        let max = u64::MAX;
-        let sec_max = max/1_000_000;
-        assert_eq!(secs(sec_max).ticks(),max);
-        assert_eq!(secs(sec_max + 1).ticks(), max);
-        assert_eq!(secs(max).ticks(), max);
+        let mil_max = u64::MAX / 1_000;
+        assert_eq!(millis(mil_max).ticks(), mil_max * 1_000); // largest exact value
+        assert_eq!(millis(mil_max + 1).ticks(), u64::MAX);    // overflow saturates
+        assert_eq!(millis(u64::MAX).ticks(), u64::MAX);
+    }
+
+    #[test]
+    fn secs_test() {
+        assert_eq!(secs(0).ticks(), 0);
+        assert_eq!(secs(1).ticks(), 1_000_000);
+
+        let sec_max = u64::MAX / 1_000_000;
+        assert_eq!(secs(sec_max).ticks(), sec_max * 1_000_000); // largest exact value
+        assert_eq!(secs(sec_max + 1).ticks(), u64::MAX);        // overflow saturates
+        assert_eq!(secs(u64::MAX).ticks(), u64::MAX);
     }
     #[test]
     fn from_monotonic_test(){

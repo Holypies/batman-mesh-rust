@@ -53,7 +53,7 @@ pub trait Packet: Sized {
 
 fn need(got: usize, want: usize) -> Result<(), PacketError> {
     if got < want {
-        Err(PacketError::TooLong {
+        Err(PacketError::TooShort {
             need: want,
             got,
         })
@@ -556,20 +556,21 @@ mod tests {
 
         // exact len wanted
         assert_eq!(check_header(&buf, 10, BATADV_UNICAST), Ok(()));
-        // TODO: see if we need to limit this functionality
-        // shorter then wanted
+
+
+        // buffer longer than the header: normal, the payload follows it
         assert_eq!(check_header(&buf, 8, BATADV_UNICAST), Ok(()));
 
-        // longer than wanted
+        // buffer shorter than the header
         assert_eq!(
             check_header(&buf, 11, BATADV_UNICAST),
-            Err(PacketError::TooLong { need: 11, got: 10 })
+            Err(PacketError::TooShort { need: 11, got: 10 })
         );
 
         // length checked before type
         assert_eq!(
             check_header(&buf, 11, BATADV_BCAST),
-            Err(PacketError::TooLong { need: 11, got: 10 })
+            Err(PacketError::TooShort { need: 11, got: 10 })
         );
 
         // wrong type

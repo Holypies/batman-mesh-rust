@@ -61,7 +61,7 @@ pub fn build_ogm_frame(
     );
     eth_header.write(eth_slot)?;
 
-    buffer.append(MIN_ETH_FRAME_SIZE.saturating_sub(buffer.len()))?;
+    buffer.append(MIN_ETH_FRAME_SIZE.saturating_sub(buffer.len()))?.fill(0);
     Ok(())
 }
 

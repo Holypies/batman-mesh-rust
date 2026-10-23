@@ -115,31 +115,21 @@ impl<const N:usize,const HEADROOM:usize> FrameBuffer<N, HEADROOM>{
         self.data = [0u8; N];
     }
 
-    pub fn load_frame(&mut self, frame:&[u8])->Result<(), FrameError>{
-        let available_space = N-HEADROOM;
-        if frame.len()>available_space{
-             return Err(FrameError::NoHeadRoom{need:frame.len(), got:available_space});
-        }
-        self.start = HEADROOM;
-        self.end = HEADROOM+frame.len();
-        self.data[self.start..self.end].copy_from_slice(frame);
-        Ok(())
-    }
 
     pub fn rx_space(&mut self)->&mut [u8]{
         self.reset_cursors();
         &mut self.data[HEADROOM..N]
     }
 
-    pub fn commit(&self, com:&[u8])->Result<(), FrameError>{
-        if self.start == HEADROOM && self.end == HEADROOM{
-            let cap: usize = N - HEADROOM;
-            if com.len()>cap{
-                return Err(FrameError::NoCapacity{need:com.len(), cap:cap as usize});
-            }
-
+    pub fn commit(&mut self, data: &[u8]) -> Result<(), FrameError> {
+        let cap = N - HEADROOM;
+        if data.len() > cap {
+            return Err(FrameError::NoCapacity { need: data.len(), cap });
         }
-        return Err(FrameError::TooShort{need:com.len(), got:self.len()});
+        self.start = HEADROOM;
+        self.end = HEADROOM + data.len();
+        self.data[self.start..self.end].copy_from_slice(data);
+        Ok(())
     }
 
 }
@@ -162,13 +152,13 @@ mod tests {
 
     #[test]
     fn frame_buffer_len_test(){
-        let mut buf_new: FrameBuffer<8, 14> = FrameBuffer::new();
+        let mut buf_new: FrameBuffer<14, 14> = FrameBuffer::new();
         // empty
         assert_eq!(buf_new.len(), 0);
 
         // len of 16
         buf_new.end = 16;
-        assert_eq!(buf_new.len(), 16);
+        assert_eq!(buf_new.len(), 2);
 
         // len of 2-16 = 14
         buf_new.start = 2;
@@ -182,7 +172,7 @@ mod tests {
 
     #[test]
     fn frame_buffer_headroom_test(){
-        let buf_new: FrameBuffer<8, 14> = FrameBuffer::new();
+        let buf_new: FrameBuffer<14, 14> = FrameBuffer::new();
         assert_eq!(buf_new.headroom(), 14);
 
         // --- edge cases ---
@@ -197,7 +187,7 @@ mod tests {
 
     #[test]
     fn frame_buffer_tailroom_test(){
-        let buf_new: FrameBuffer<8, 14> = FrameBuffer::new();
+        let buf_new: FrameBuffer<36, 14> = FrameBuffer::new();
         assert_eq!(buf_new.tailroom(), 22);
 
         // --- edge cases ---
@@ -323,10 +313,11 @@ mod tests {
         let r = buf.truncate(2);
         assert_eq!(r, Err(FrameError::TooShort{need:2, got:1}));
 
-        // check what happens when len = 0
-        let _r = buf.truncate(0);
+        // truncate(0) keeps nothing: the buffer becomes empty
+        assert_eq!(buf.truncate(0), Ok(()));
         assert_eq!(buf.start, 4);
-        assert_eq!(buf.end, 5);
+        assert_eq!(buf.end, 4);
+        assert_eq!(buf.len(), 0);
     }
     #[test]
     fn frame_buffer_strip_test(){
@@ -439,6 +430,7 @@ mod tests {
             assert_eq!(*b, i as u8);
         }
     }
+
     #[test]
     fn frame_buffer_reset_frame_data_test(){
         let mut buf: FrameBuffer<16, 4> = FrameBuffer::new();
@@ -456,55 +448,7 @@ mod tests {
         assert_eq!(buf.start, 2);
         assert_eq!(buf.end, 9);
     }
-    #[test]
-    fn frame_buffer_load_frame_test(){
-        let mut buf: FrameBuffer<16, 4> = FrameBuffer::new();
-        let frame = [0xDEu8, 0xAD, 0xBE, 0xEF, 0x01];
 
-        assert_eq!(buf.load_frame(&frame), Ok(()));
-        assert_eq!(buf.start, 4);
-        assert_eq!(buf.end, 9);
-        assert_eq!(buf.bytes(), &frame);
-        // outside window untouched
-        assert_eq!(&buf.data[..4], &[0u8; 4]);
-        assert_eq!(&buf.data[9..], &[0u8; 7]);
-
-        // reload after cursors moved: start back to HEADROOM, window replaced
-        buf.start = 1;
-        buf.end = 15;
-        assert_eq!(buf.load_frame(&[7, 8]), Ok(()));
-        assert_eq!(buf.start, 4);
-        assert_eq!(buf.end, 6);
-        assert_eq!(buf.bytes(), &[7u8, 8]);
-
-        // exactly full capacity (N - HEADROOM = 12)
-        let full = [0xFFu8; 12];
-        assert_eq!(buf.load_frame(&full), Ok(()));
-        assert_eq!(buf.start, 4);
-        assert_eq!(buf.end, 16);
-        assert_eq!(buf.tailroom(), 0);
-        assert_eq!(buf.bytes(), &full);
-
-        // empty frame
-        assert_eq!(buf.load_frame(&[]), Ok(()));
-        assert_eq!(buf.start, 4);
-        assert_eq!(buf.end, 4);
-    }
-
-    #[test]
-    fn frame_buffer_load_frame_too_large_test(){
-        let mut buf: FrameBuffer<16, 4> = FrameBuffer::new();
-        assert_eq!(buf.load_frame(&[1, 2, 3]), Ok(()));
-
-        let big = [0xAAu8; 13];
-        // frame exceeds N - HEADROOM: capacity error, same variant commit() uses
-        assert_eq!(buf.load_frame(&big), Err(FrameError::NoCapacity { need: 13, cap: 12 }));
-
-        // previous frame intact
-        assert_eq!(buf.start, 4);
-        assert_eq!(buf.end, 7);
-        assert_eq!(buf.bytes(), &[1u8, 2, 3]);
-    }
     #[test]
     fn frame_buffer_rx_space_test(){
         let mut buf: FrameBuffer<16, 4> = FrameBuffer::new();
@@ -533,7 +477,7 @@ mod tests {
 
     #[test]
     fn frame_buffer_commit_too_large_test(){
-        let buf: FrameBuffer<16, 4> = FrameBuffer::new();
+        let mut buf: FrameBuffer<16, 4> = FrameBuffer::new();
         assert_eq!(buf.commit(&[0u8; 13]), Err(FrameError::NoCapacity { need: 13, cap: 12 }));
         assert_eq!(buf.start, 4);
         assert_eq!(buf.end, 4);

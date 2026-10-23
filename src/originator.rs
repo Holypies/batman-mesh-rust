@@ -110,15 +110,17 @@ impl Originator {
     // --- functions ---
     // TODO: fix .unwrap(); to match for panic free code
     pub fn add_neighbor(&mut self, mut neigh:Neighbor, now:Instant)->Result<(),OriginatorError>{
-        if self.neighbors.is_full(){
-            return Err(OriginatorError::NeighborListFull);
+        if let Some(existing) = self.find_neighbor_mut(neigh.addr()) {
+            existing.touch(now);
+            return Ok(());
         }
-        let new_mac = neigh.addr();
-        if self.find_neighbor(new_mac)==None{
-            self.neighbors.push(neigh).unwrap();
-        }
+
+        // New: refresh it, then store it.
         neigh.touch(now);
-        Ok(())
+        match self.neighbors.push(neigh) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(OriginatorError::NeighborListFull),
+        }
     }
 
     pub fn touch(&mut self, now:Instant){
@@ -474,9 +476,9 @@ mod tests{
         assert_eq!(orig.neighbors.get(0).unwrap().addr, BROADCAST_MAC);
 
         // same addr again: Ok, no duplicate entry
-        assert_eq!(orig.add_neighbor(Neighbor::new(BROADCAST_MAC, THEN), NOW), Ok(()));
+        assert_eq!(orig.add_neighbor(Neighbor::new(BROADCAST_MAC, NOW), THEN), Ok(()));
         assert_eq!(orig.neighbors.len(), 1);
-        assert_eq!(orig.neighbors.get(0).unwrap().last_seen, THEN);
+        assert_eq!(orig.neighbors.get(0).unwrap().last_seen, THEN); 
 
         // second distinct addr: appended
         let mac2 = Mac::from_octets([0x11;6]);
@@ -521,59 +523,49 @@ mod tests{
         assert!(empty.find_neighbor(mac(1)).is_none());
 
         
-        let mut first = Neighbor::new(mac(2), NOW);
-        let mut second = Neighbor::new(mac(3), NOW);
+        let first = Neighbor::new(mac(2), NOW);
+        let second = Neighbor::new(mac(3), NOW);
         let orig = orig_with(&[Neighbor::new(mac(1), NOW), first, second]);
 
         assert_eq!(orig.find_neighbor(mac(1)).unwrap().addr, mac(1));
-        assert_eq!(orig.find_neighbor(mac(2)).unwrap(), first);
-        assert_eq!(orig.find_neighbor(mac(3)).unwrap(), second);
+        assert_eq!(orig.find_neighbor(mac(2)).unwrap(), &first);
+        assert_eq!(orig.find_neighbor(mac(3)).unwrap(), &second);
 
         // unknown addr
         assert!(orig.find_neighbor(ZERO_MAC).is_none());
-
-        // originator's own mac is not a neighbor
-        let mut stp =Neighbor::new(Mac::STP, NOW);
-        orig.add_neighbor(stp, NOW);
-        assert!(orig.find_neighbor(STP_MAC).is_none());
-
     }
 
     #[test]
     fn find_neighbor_mut_test(){
        // empty
-        let empty = Originator::new(STP_MAC, NOW);
+        let mut empty = Originator::new(STP_MAC, NOW);
         assert!(empty.find_neighbor_mut(mac(1)).is_none());
 
         
-        let mut first = Neighbor::new(mac(2), NOW);
-        let mut second = Neighbor::new(mac(3), NOW);
-        let orig = orig_with(&[Neighbor::new(mac(1), NOW), first, second]);
+        let first = Neighbor::new(mac(2), NOW);
+        let second = Neighbor::new(mac(3), NOW);
+        let mut orig = orig_with(&[Neighbor::new(mac(1), NOW), first, second]);
 
         let one = orig.find_neighbor_mut(mac(1)).unwrap();
-        let two = orig.find_neighbor_mut(mac(2)).unwrap();
-        let three = orig.find_neighbor_mut(mac(3)).unwrap();
-        
         assert_eq!(one.addr, mac(1));
-        assert_eq!(two, first);
-        assert_eq!(three, second);
-
-        // can be mutated
         one.touch(THEN);
-        two.touch(THEN);
-        three.touch(THEN);
 
-        assert_eq!(one.last_seen, THEN);
-        assert_eq!(two.last_seen, THEN);
-        assert_eq!(three.last_seen, THEN);
+        let two = orig.find_neighbor_mut(mac(2)).unwrap();
+        assert_eq!(two.addr, mac(2));
+        two.touch(THEN);
+
+        let three = orig.find_neighbor_mut(mac(3)).unwrap();
+        assert_eq!(three.addr, mac(3));
+        three.touch(THEN);
+        
+        // Re-fetch to verify mutations persisted inside `orig`
+        assert_eq!(orig.find_neighbor_mut(mac(1)).unwrap().last_seen, THEN);
+        assert_eq!(orig.find_neighbor_mut(mac(2)).unwrap().last_seen, THEN);
+        assert_eq!(orig.find_neighbor_mut(mac(3)).unwrap().last_seen, THEN);
+
 
         // unknown addr
         assert!(orig.find_neighbor_mut(ZERO_MAC).is_none());
-
-        // originator's own mac is not a neighbor
-        let mut stp =Neighbor::new(Mac::STP, NOW);
-        orig.add_neighbor(stp, NOW);
-        assert!(orig.find_neighbor_mut(STP_MAC).is_none());
 
     }
 

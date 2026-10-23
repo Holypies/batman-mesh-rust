@@ -85,8 +85,9 @@ pub fn classify_bcast(my_mac: Mac, payload: &[u8]) -> BroadcastType {
     }
 
     let orig = bcast.originator();
+
     // check if zero
-    if !orig.is_zero() {
+    if !orig.is_valid() {
         return BroadcastType::Invalid;
     }
 
@@ -249,19 +250,6 @@ mod test{
         buf[BCAST_INNER_OFFSET..end].copy_from_slice(inner);
         end
     }
-
-    fn run_process_frame<'f>(
-        hardif: &mut HardInterface<MockDriver>,
-        table: &mut OriginatorTable,
-        frame: &'f mut [u8],
-    ) -> Result<&'f [u8], &'static str> {
-        process_bcast(hardif, table, frame, NOW).map_err(|reason| match reason {
-            DropReason::InvalidBcast => "InvalidBcast",
-            DropReason::UnknownOriginator => "UnknownOriginator",
-            DropReason::Duplicate => "Duplicate",
-            _ => "other DropReason",
-        })
-    }
     
     
     #[test]
@@ -380,7 +368,7 @@ mod test{
         // largest inner frame that fits tailroom
         let room = MAX_BATMAN_FRAME_SIZE - BCAST_HEADROOM;
         let big = [0x55u8; MAX_BATMAN_FRAME_SIZE];
-        assert!(build_bcast_frame(header, src, &big, &mut buf).is_ok());
+        assert!(build_bcast_frame(header, src, &big[..room], &mut buf).is_ok());
         assert_eq!(buf.len(), BCAST_INNER_OFFSET + room);
 
 
